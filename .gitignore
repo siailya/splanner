@@ -7,3 +7,4 @@ test-results
 .playwright-cli
 .DS_Store
 *.log
+output/playwright
