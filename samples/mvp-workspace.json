@@ -1,0 +1,230 @@
+{
+  "format": "delivery-planner-workspace",
+  "application": "delivery-planner",
+  "schemaVersion": 3,
+  "appVersion": "1.0.0",
+  "exportedAt": "2026-07-23T09:00:00.000Z",
+  "workspace": {
+    "workspace": {
+      "id": "workspace-sample",
+      "name": "Sample Delivery Plan",
+      "schemaVersion": 3,
+      "createdAt": "2026-07-23T09:00:00.000Z",
+      "updatedAt": "2026-07-23T09:00:00.000Z",
+      "revision": 1,
+      "settings": {
+        "locale": "ru-RU",
+        "firstDayOfWeek": 1,
+        "defaultTimelineScale": "day",
+        "defaultMoveMode": "cascade",
+        "autoLinkNewStages": false,
+        "capacityWarningThreshold": 0.8,
+        "theme": "system"
+      }
+    },
+    "quarters": [
+      {
+        "id": "2026-Q3",
+        "workspaceId": "workspace-sample",
+        "year": 2026,
+        "number": 3,
+        "startDate": "2026-07-01",
+        "endDate": "2026-09-30"
+      },
+      {
+        "id": "2026-Q4",
+        "workspaceId": "workspace-sample",
+        "year": 2026,
+        "number": 4,
+        "startDate": "2026-10-01",
+        "endDate": "2026-12-31"
+      }
+    ],
+    "epics": [
+      {
+        "id": "epic-sample",
+        "workspaceId": "workspace-sample",
+        "title": "CPM–CPA аукцион",
+        "code": "ADS-01",
+        "descriptionMarkdown": "## Цель\n\nЗапустить две параллельные ветки и общий релиз.",
+        "status": "active",
+        "marker": "#2563eb",
+        "sortOrder": 0,
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "stages": [
+      {
+        "id": "stage-research",
+        "workspaceId": "workspace-sample",
+        "epicId": "epic-sample",
+        "title": "Исследование",
+        "kind": "task",
+        "activityTypeId": "activity-development",
+        "status": "done",
+        "descriptionMarkdown": "Проверить механику.",
+        "startDate": "2026-07-20",
+        "endDate": "2026-07-24",
+        "durationWorkdays": 5,
+        "locked": false,
+        "sortOrder": 0,
+        "quarterIds": ["2026-Q3"],
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      },
+      {
+        "id": "stage-development",
+        "workspaceId": "workspace-sample",
+        "epicId": "epic-sample",
+        "title": "Разработка",
+        "kind": "scope",
+        "activityTypeId": "activity-development",
+        "status": "in_progress",
+        "descriptionMarkdown": "Основная ветка.",
+        "startDate": "2026-07-27",
+        "endDate": "2026-08-07",
+        "durationWorkdays": 10,
+        "locked": false,
+        "sortOrder": 1,
+        "quarterIds": ["2026-Q3"],
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      },
+      {
+        "id": "stage-release",
+        "workspaceId": "workspace-sample",
+        "epicId": "epic-sample",
+        "title": "Релиз",
+        "kind": "milestone",
+        "activityTypeId": "activity-development",
+        "status": "planned",
+        "descriptionMarkdown": "",
+        "startDate": "2026-08-10",
+        "endDate": "2026-08-10",
+        "durationWorkdays": 0,
+        "locked": false,
+        "sortOrder": 2,
+        "quarterIds": ["2026-Q3"],
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "dependencies": [
+      {
+        "id": "dependency-1",
+        "workspaceId": "workspace-sample",
+        "epicId": "epic-sample",
+        "predecessorStageId": "stage-research",
+        "successorStageId": "stage-development",
+        "type": "finish_to_start",
+        "lagWorkdays": 0,
+        "createdAt": "2026-07-23T09:00:00.000Z"
+      },
+      {
+        "id": "dependency-2",
+        "workspaceId": "workspace-sample",
+        "epicId": "epic-sample",
+        "predecessorStageId": "stage-development",
+        "successorStageId": "stage-release",
+        "type": "finish_to_start",
+        "lagWorkdays": 0,
+        "createdAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "activityTypes": [
+      {
+        "id": "activity-development",
+        "workspaceId": "workspace-sample",
+        "name": "Разработка",
+        "slug": "development",
+        "colorToken": "#2563eb",
+        "sortOrder": 0,
+        "isActive": true
+      }
+    ],
+    "roles": [
+      {
+        "id": "role-backend",
+        "workspaceId": "workspace-sample",
+        "name": "Backend",
+        "marker": "#2563eb",
+        "sortOrder": 0,
+        "isActive": true,
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "people": [
+      {
+        "id": "person-anna",
+        "workspaceId": "workspace-sample",
+        "name": "Анна",
+        "primaryRoleId": "role-backend",
+        "roleIds": ["role-backend"],
+        "baseCapacityFte": 1,
+        "isActive": true,
+        "sortOrder": 0,
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "assignments": [
+      {
+        "id": "assignment-development",
+        "workspaceId": "workspace-sample",
+        "stageId": "stage-development",
+        "targetType": "person",
+        "targetId": "person-anna",
+        "units": 1,
+        "allocationFte": 1
+      }
+    ],
+    "workItems": [
+      {
+        "id": "work-item-1",
+        "workspaceId": "workspace-sample",
+        "epicId": "epic-sample",
+        "stageId": "stage-development",
+        "title": "Реализовать pacing",
+        "status": "in_progress",
+        "personId": "person-anna",
+        "sortOrder": 0,
+        "createdAt": "2026-07-23T09:00:00.000Z",
+        "updatedAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "baselines": [
+      {
+        "id": "baseline-approved",
+        "workspaceId": "workspace-sample",
+        "name": "Согласовано",
+        "quarterIds": ["2026-Q3"],
+        "createdAt": "2026-07-23T09:00:00.000Z"
+      }
+    ],
+    "baselineStages": [
+      {
+        "id": "baseline-stage-development",
+        "baselineId": "baseline-approved",
+        "stageId": "stage-development",
+        "epicId": "epic-sample",
+        "title": "Разработка",
+        "kind": "scope",
+        "activityTypeId": "activity-development",
+        "status": "planned",
+        "startDate": "2026-07-27",
+        "endDate": "2026-08-05",
+        "durationWorkdays": 8
+      }
+    ],
+    "calendar": {
+      "id": "calendar-sample",
+      "workspaceId": "workspace-sample",
+      "workingWeekdays": [1, 2, 3, 4, 5],
+      "holidays": [],
+      "extraWorkingDays": [],
+      "revision": 0
+    }
+  }
+}

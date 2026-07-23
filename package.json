@@ -1,0 +1,46 @@
+{
+  "name": "delivery-planner",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "lint": "eslint app tests nuxt.config.ts playwright.config.ts vitest.config.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:performance": "vitest run tests/performance"
+  },
+  "dependencies": {
+    "@nuxt/ui": "latest",
+    "@pinia/nuxt": "latest",
+    "@vueuse/nuxt": "latest",
+    "dexie": "latest",
+    "dhtmlx-gantt": "latest",
+    "marked": "17.0.6",
+    "nuxt": "latest",
+    "pinia": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "latest",
+    "@nuxt/test-utils": "latest",
+    "@playwright/test": "latest",
+    "@types/node": "latest",
+    "@vue/test-utils": "latest",
+    "eslint": "9.39.1",
+    "eslint-plugin-vue": "10.6.2",
+    "fake-indexeddb": "latest",
+    "fast-check": "4.3.0",
+    "happy-dom": "latest",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.0",
+    "vitest": "latest",
+    "vue-tsc": "latest"
+  }
+}
