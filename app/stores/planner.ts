@@ -1,4 +1,5 @@
 import { addWorkingDays, workingDayDelta, workingDaysBetween } from '../domain/calendar/date'
+import { autoRoleForStage } from '../domain/capacity/auto-assignment'
 import { CommandHistory } from '../domain/commands/history'
 import { createEpic, createPerson, createRole, createStage, newId, nowISO } from '../domain/models/factories'
 import type {
@@ -277,6 +278,22 @@ export const usePlannerStore = defineStore('planner', () => {
       if (!draft.epics.some(epic => epic.id === input.epicId)) throw new Error('Эпик не найден')
       const previous = draft.stages.filter(item => item.epicId === input.epicId).sort((a, b) => b.sortOrder - a.sortOrder)[0]
       draft.stages.push(stage)
+      const autoRole = autoRoleForStage(
+        stage.kind,
+        draft.activityTypes.find(activityType => activityType.id === stage.activityTypeId),
+        draft.roles,
+      )
+      if (autoRole) {
+        draft.assignments.push({
+          id: newId('assignment'),
+          workspaceId: draft.workspace.id,
+          stageId: stage.id,
+          targetType: 'role',
+          targetId: autoRole.id,
+          units: 1,
+          allocationFte: 1,
+        })
+      }
       if (draft.workspace.settings.autoLinkNewStages && previous) {
         draft.dependencies.push({
           id: newId('dependency'),

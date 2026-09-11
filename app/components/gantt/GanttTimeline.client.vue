@@ -39,6 +39,8 @@ const emit = defineEmits<{
   linkDelete: [id: string]
   editStage: [id: string]
   editEpic: [id: string]
+  epicSelect: [id: string]
+  selectionClear: []
   moveStage: [payload: { id: string; epicId: string }]
   reorderStage: [payload: { id: string; epicId: string; index: number }]
   epicCollapsed: [payload: { id: string; collapsed: boolean }]
@@ -57,6 +59,7 @@ let alternateDuringDrag = false
 let worktimeOverrideDates: ISODate[] = []
 let renderedViewKey: string | undefined
 let viewportRestoreFrame: number | undefined
+let initialViewportFrame: number | undefined
 
 function viewKey(): string {
   return [props.rangeStart, props.rangeEnd, props.scale, props.gridWidth].join('|')
@@ -71,6 +74,7 @@ function taskData() {
     readonly: true,
     epicId: epic.id,
     marker: epic.marker,
+    color: epic.marker ?? '#2563eb',
     sortOrder: epic.sortOrder,
     workDone: props.workItems?.filter(item => item.epicId === epic.id && item.status === 'done').length ?? 0,
     workTotal: props.workItems?.filter(item => item.epicId === epic.id).length ?? 0,
@@ -244,7 +248,12 @@ function attachEvents(gantt: import('dhtmlx-gantt').GanttStatic) {
     }),
     gantt.attachEvent('onTaskClick', (id, event) => {
       const value = String(id)
-      if (!value.startsWith('epic:')) emit('stageSelect', { id: value, additive: (event as MouseEvent).metaKey || (event as MouseEvent).ctrlKey, range: (event as MouseEvent).shiftKey })
+      if (value.startsWith('epic:')) emit('epicSelect', value.slice(5))
+      else emit('stageSelect', { id: value, additive: (event as MouseEvent).metaKey || (event as MouseEvent).ctrlKey, range: (event as MouseEvent).shiftKey })
+      return true
+    }),
+    gantt.attachEvent('onEmptyClick', () => {
+      emit('selectionClear')
       return true
     }),
     gantt.attachEvent('onGanttScroll', (x, y) => {
@@ -386,6 +395,15 @@ function scrollToToday() {
   instance?.showDate(new Date())
 }
 
+function scrollToInitialDate() {
+  const today = fromLocalDate(new Date())
+  if (today < props.rangeStart || today > props.rangeEnd) return
+  initialViewportFrame = requestAnimationFrame(() => {
+    instance?.showDate(toLocalDate(today))
+    initialViewportFrame = undefined
+  })
+}
+
 function scrollToX(x: number) {
   instance?.scrollTo(x, null)
 }
@@ -416,6 +434,7 @@ onMounted(async () => {
   attachEvents(instance)
   instance.init(container.value!)
   instance.parse(taskData())
+  scrollToInitialDate()
   scheduleBaselineOverlays()
   renderedViewKey = viewKey()
   container.value?.addEventListener('pointerdown', onPointerDown)
@@ -429,6 +448,7 @@ watch(() => [props.selectedStageIds, props.highlightedStageIds], syncVisualState
 onBeforeUnmount(() => {
   if (!instance) return
   if (viewportRestoreFrame !== undefined) cancelAnimationFrame(viewportRestoreFrame)
+  if (initialViewportFrame !== undefined) cancelAnimationFrame(initialViewportFrame)
   clearCascadeGhosts()
   for (const id of eventIds) instance.detachEvent(id)
   container.value?.removeEventListener('pointerdown', onPointerDown)

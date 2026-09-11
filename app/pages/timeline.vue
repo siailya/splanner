@@ -87,7 +87,7 @@
       <UButton size="xs" color="neutral" variant="ghost" icon="i-lucide-copy-plus" label="Дублировать" @click="duplicateSelection" />
       <UButton size="xs" color="neutral" variant="ghost" label="Сжать цепочку" @click="perform(() => planner.compactStages(selectedStageIds))" />
       <label><input v-model="copyDependencies" type="checkbox" /> связи</label>
-      <button class="bulk-toolbar__close" aria-label="Снять выделение" @click="selectedStageIds = []"><UIcon name="i-lucide-x" /></button>
+      <button class="bulk-toolbar__close" aria-label="Снять выделение" @click="clearStageSelection"><UIcon name="i-lucide-x" /></button>
     </div>
 
     <section class="timeline-workspace" :class="{ 'timeline-workspace--with-banner': planner.conflicts.length, 'timeline-workspace--with-bulk': selectedStageIds.length }">
@@ -137,6 +137,8 @@
         @edit-dependency="openDependency"
         @range-create="openRangeStage"
         @stage-select="handleStageSelect"
+        @epic-select="handleEpicSelect"
+        @selection-clear="clearStageSelection"
         @viewport-change="payload => timelineScrollX = payload.x"
       />
       </div>
@@ -316,7 +318,7 @@
 </template>
 
 <script setup lang="ts">
-import { addWorkingDays, compareDates, workingDayDelta } from '../domain/calendar/date'
+import { addWorkingDays, compareDates, fromLocalDate, workingDayDelta } from '../domain/calendar/date'
 import { compareBaseline } from '../domain/baseline/diff'
 import { calculateCapacity, CapacityCache, type CapacityCell, type CapacityContribution, type CapacityRow } from '../domain/capacity/engine'
 import type { EpicStatus, ISODate, QuarterId, StageKind, StageStatus, WorkingCalendar } from '../domain/models/types'
@@ -343,6 +345,8 @@ const dependencyId = ref('')
 const dependencyLag = ref(0)
 const selectedStageIds = ref<string[]>([])
 const selectionAnchorId = ref('')
+const selectedEpicId = ref('')
+const lastCreatedStageEpicId = ref('')
 const clipboardStageIds = ref<string[]>([])
 const copyDependencies = ref(true)
 const bulkDelta = ref(1)
@@ -365,8 +369,7 @@ let epicDescriptionTimer: ReturnType<typeof setTimeout> | undefined
 
 await planner.initialize()
 
-const today = new Date()
-const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}` as ISODate
+const todayIso = fromLocalDate(new Date())
 const currentQuarterId = quarterIdForDate(todayIso)
 const followingQuarterId = nextQuarterId(currentQuarterId)
 const quarterModes = [
@@ -460,8 +463,11 @@ const calendarForm = reactive({ workingWeekdays: [1, 2, 3, 4, 5] as number[], ho
 function openNewEpic() { Object.assign(epicForm, { id: '', title: '', code: '', status: 'active', marker: '#2563eb', descriptionMarkdown: '' }); modal.value = 'epic' }
 function openEditEpic(id: string) { const epic = planner.data?.epics.find(item => item.id === id); if (!epic) return; Object.assign(epicForm, { id, title: epic.title, code: epic.code ?? '', status: epic.status, marker: epic.marker ?? '#2563eb', descriptionMarkdown: epic.descriptionMarkdown }); modal.value = 'epic' }
 function openNewStage() {
-  const start = range.value.startDate
-  Object.assign(stageForm, { id: '', epicId: activeEpics.value[0]?.id ?? '', title: '', kind: 'task', activityTypeId: planner.data?.activityTypes.find(type => type.slug === 'development')?.id ?? '', status: 'planned', startDate: start, endDate: addWorkingDays(start, 4, planner.data!.calendar), locked: false, descriptionMarkdown: '', externalUrl: '' })
+  const start = fromLocalDate(new Date())
+  const activeEpicIds = new Set(activeEpics.value.map(epic => epic.id))
+  const parentEpicId = [selectedEpicId.value, lastCreatedStageEpicId.value, activeEpics.value[0]?.id]
+    .find(epicId => epicId && activeEpicIds.has(epicId)) ?? ''
+  Object.assign(stageForm, { id: '', epicId: parentEpicId, title: '', kind: 'task', activityTypeId: planner.data?.activityTypes.find(type => type.slug === 'development')?.id ?? '', status: 'planned', startDate: start, endDate: addWorkingDays(start, 4, planner.data!.calendar), locked: false, descriptionMarkdown: '', externalUrl: '' })
   modal.value = 'stage'
 }
 function openRangeStage(payload: { epicId: string; startDate: ISODate; endDate: ISODate }) { openNewStage(); Object.assign(stageForm, payload) }
@@ -483,7 +489,7 @@ async function submitStage() {
     if (compareDates(stageForm.startDate as ISODate, stageForm.endDate as ISODate) > 0 && stageForm.kind !== 'milestone') throw new Error('Дата начала позже окончания')
     if (stageForm.externalUrl && !/^https?:\/\//i.test(stageForm.externalUrl)) throw new Error('Внешняя ссылка должна начинаться с http:// или https://')
     if (stageForm.id) await planner.updateStage(stageForm.id, { epicId: stageForm.epicId, title: stageForm.title, kind: stageForm.kind, activityTypeId: stageForm.activityTypeId, status: stageForm.status, startDate: stageForm.startDate as ISODate, endDate: stageForm.kind === 'milestone' ? stageForm.startDate as ISODate : stageForm.endDate as ISODate, locked: stageForm.locked, descriptionMarkdown: stageForm.descriptionMarkdown, externalUrl: stageForm.externalUrl || undefined })
-    else { const created = await planner.addStage({ epicId: stageForm.epicId, title: stageForm.title, kind: stageForm.kind, activityTypeId: stageForm.activityTypeId, startDate: stageForm.startDate as ISODate, endDate: stageForm.kind === 'milestone' ? undefined : stageForm.endDate as ISODate }); if (stageForm.descriptionMarkdown || stageForm.externalUrl) await planner.updateStage(created.id, { descriptionMarkdown: stageForm.descriptionMarkdown, externalUrl: stageForm.externalUrl || undefined }) }
+    else { const created = await planner.addStage({ epicId: stageForm.epicId, title: stageForm.title, kind: stageForm.kind, activityTypeId: stageForm.activityTypeId, startDate: stageForm.startDate as ISODate, endDate: stageForm.kind === 'milestone' ? undefined : stageForm.endDate as ISODate }); lastCreatedStageEpicId.value = created.epicId; if (stageForm.descriptionMarkdown || stageForm.externalUrl) await planner.updateStage(created.id, { descriptionMarkdown: stageForm.descriptionMarkdown, externalUrl: stageForm.externalUrl || undefined }) }
     modal.value = undefined
   })
 }
@@ -507,6 +513,8 @@ async function handleTaskChange(payload: { id: string; startDate: ISODate; endDa
 }
 
 function handleStageSelect(payload: { id: string; additive: boolean; range: boolean }) {
+  const stage = planner.data?.stages.find(item => item.id === payload.id)
+  if (stage) selectedEpicId.value = stage.epicId
   if (payload.range && selectionAnchorId.value) {
     const ids = visibleStages.value.map(stage => stage.id); const from = ids.indexOf(selectionAnchorId.value); const to = ids.indexOf(payload.id)
     if (from >= 0 && to >= 0) selectedStageIds.value = ids.slice(Math.min(from, to), Math.max(from, to) + 1)
@@ -514,6 +522,18 @@ function handleStageSelect(payload: { id: string; additive: boolean; range: bool
     selectedStageIds.value = selectedStageIds.value.includes(payload.id) ? selectedStageIds.value.filter(id => id !== payload.id) : [...selectedStageIds.value, payload.id]
     selectionAnchorId.value = payload.id
   } else { selectedStageIds.value = [payload.id]; selectionAnchorId.value = payload.id }
+}
+
+function handleEpicSelect(id: string) {
+  selectedEpicId.value = id
+  selectedStageIds.value = []
+  selectionAnchorId.value = ''
+}
+
+function clearStageSelection() {
+  selectedStageIds.value = []
+  selectedEpicId.value = ''
+  selectionAnchorId.value = ''
 }
 
 function copySelection() { clipboardStageIds.value = [...selectedStageIds.value]; toast.add({ title: `Скопировано этапов: ${clipboardStageIds.value.length}` }) }

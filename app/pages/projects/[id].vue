@@ -11,7 +11,7 @@
     <div class="epic-layout">
       <main>
         <section class="content-card"><div class="section-heading"><div><span class="eyebrow">Контекст</span><h2>Описание</h2></div><span class="autosave-state">{{ descriptionSaving ? 'Сохранение…' : 'Автосохранено' }}</span></div><MarkdownEditor v-model="description" /></section>
-        <section class="content-card"><div class="section-heading"><div><span class="eyebrow">Delivery</span><h2>Этапы</h2></div><UButton size="sm" icon="i-lucide-plus" label="Этап" @click="showStageForm = !showStageForm" /></div>
+        <section class="content-card"><div class="section-heading"><div><span class="eyebrow">Delivery</span><h2>Этапы</h2></div><UButton size="sm" icon="i-lucide-plus" label="Этап" @click="toggleStageForm" /></div>
           <form v-if="showStageForm" class="quick-stage" @submit.prevent="addStage"><input v-model="newStage.title" required placeholder="Название этапа" /><select v-model="newStage.kind"><option value="task">Task</option><option value="scope">Scope</option><option value="milestone">Milestone</option></select><input v-model="newStage.startDate" type="date" required /><input v-if="newStage.kind !== 'milestone'" v-model="newStage.endDate" type="date" required /><UButton type="submit" label="Создать" size="sm" /></form>
           <div class="epic-stage-list"><article v-for="stage in stages" :key="stage.id"><i :style="{ background: activity(stage.activityTypeId)?.colorToken }" /><div><strong>{{ stage.title }}</strong><span>{{ stage.startDate }} — {{ stage.endDate }} · {{ stage.durationWorkdays }} раб. дн.</span></div><span>{{ stageAssignments(stage.id) }} FTE</span><span>{{ stageItems(stage.id).filter(item => item.status === 'done').length }}/{{ stageItems(stage.id).length }}</span><NuxtLink :to="`/timeline?stage=${stage.id}`" aria-label="Показать на Timeline"><UIcon name="i-lucide-arrow-up-right" /></NuxtLink></article></div>
         </section>
@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { addWorkingDays } from '../../domain/calendar/date'
+import { addWorkingDays, fromLocalDate } from '../../domain/calendar/date'
 import type { ISODate, StageKind } from '../../domain/models/types'
 import { usePlannerStore } from '../../stores/planner'
 const route = useRoute(); const planner = usePlannerStore(); await planner.initialize()
@@ -43,7 +43,7 @@ const period = computed(() => stages.value.length ? `${stages.value.map(stage =>
 const personDays = computed(() => Math.round(stages.value.reduce((sum, stage) => sum + stage.durationWorkdays * stageAssignments(stage.id), 0) * 100) / 100)
 const description = ref(epic.value?.descriptionMarkdown ?? ''); const descriptionSaving = ref(false); let descriptionTimer: ReturnType<typeof setTimeout> | undefined
 watch(description, (value) => { if (!epic.value || value === epic.value.descriptionMarkdown) return; descriptionSaving.value = true; clearTimeout(descriptionTimer); descriptionTimer = setTimeout(async () => { await planner.updateEpic(epic.value!.id, { descriptionMarkdown: value }); descriptionSaving.value = false }, 650) })
-const start = stages.value.at(-1)?.endDate ?? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01` as ISODate
+const start = fromLocalDate(new Date())
 const showStageForm = ref(false); const newStage = reactive({ title: '', kind: 'task' as StageKind, startDate: start, endDate: addWorkingDays(start, 4, planner.data!.calendar) })
 const draggedItemId = ref(''); const draftTitles = reactive<Record<string, string>>({ '': '' })
 const groupMode = ref<'stage' | 'status' | 'person'>('stage')
@@ -63,6 +63,15 @@ function activity(id: string) { return planner.data?.activityTypes.find(type => 
 function stageAssignments(id: string) { return Math.round((planner.data?.assignments.filter(item => item.stageId === id).reduce((sum, item) => sum + item.units * item.allocationFte, 0) ?? 0) * 100) / 100 }
 function stageItems(id: string) { return items.value.filter(item => item.stageId === id) }
 function personName(id?: string) { return id ? planner.data?.people.find(person => person.id === id)?.name ?? 'Удалён' : 'Без исполнителя' }
+function toggleStageForm() {
+  if (showStageForm.value) {
+    showStageForm.value = false
+    return
+  }
+  const today = fromLocalDate(new Date())
+  Object.assign(newStage, { title: '', kind: 'task', startDate: today, endDate: addWorkingDays(today, 4, planner.data!.calendar) })
+  showStageForm.value = true
+}
 async function addStage() { await planner.addStage({ epicId: epic.value!.id, title: newStage.title, kind: newStage.kind, activityTypeId: planner.data!.activityTypes.find(type => type.slug === 'development')!.id, startDate: newStage.startDate as ISODate, endDate: newStage.kind === 'milestone' ? undefined : newStage.endDate as ISODate }); newStage.title = ''; showStageForm.value = false }
 async function addItem(stageId?: string) { const key = stageId ?? ''; const title = draftTitles[key]?.trim(); if (!title) return; await planner.addWorkItem({ epicId: epic.value!.id, stageId, title }); draftTitles[key] = '' }
 async function dropItem(groupId: string) {

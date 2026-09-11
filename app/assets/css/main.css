@@ -146,6 +146,7 @@ textarea {
 }
 .gantt_tree_content { color: var(--ui-text); font-size: 12px; }
 .gantt_task_line { border: 0; border-radius: 6px; background: #2563eb; box-shadow: 0 2px 5px rgb(15 23 42 / .15); }
+.gantt_task_line.gantt_project { background: var(--dhx-gantt-task-background); }
 .gantt_task_line.activity-research { background-color: #8b5cf6; }
 .gantt_task_line.activity-design { background-color: #ec4899; }
 .gantt_task_line.activity-development { background-color: #2563eb; }
