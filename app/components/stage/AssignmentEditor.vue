@@ -12,10 +12,10 @@
         <div v-for="assignment in assignments" :key="assignment.id" class="assignment-row">
           <span class="assignment-row__type"><UIcon :name="assignment.targetType === 'person' ? 'i-lucide-user' : 'i-lucide-users'" /></span>
           <div><strong>{{ targetName(assignment) }}</strong><span>{{ assignment.targetType === 'role' ? `${assignment.units} × ` : '' }}{{ assignment.allocationFte }} FTE</span></div>
-          <UButton color="error" variant="ghost" icon="i-lucide-trash-2" size="xs" aria-label="Удалить назначение" @click="perform(() => planner.deleteAssignment(assignment.id))" />
+          <UButton v-if="!planner.readOnly" color="error" variant="ghost" icon="i-lucide-trash-2" size="xs" aria-label="Удалить назначение" @click="perform(() => planner.deleteAssignment(assignment.id))" />
         </div>
       </div>
-      <div class="assignment-add">
+      <div v-if="!planner.readOnly" class="assignment-add">
         <select v-model="form.targetType"><option value="person">Сотрудник</option><option value="role">Потребность по роли</option></select>
         <select v-model="form.targetId"><option value="" disabled>Выберите…</option><option v-for="target in targets" :key="target.id" :value="target.id">{{ target.name }}</option></select>
         <input v-if="form.targetType === 'role'" v-model.number="form.units" type="number" min="1" max="20" step="1" title="Units" />

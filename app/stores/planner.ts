@@ -1,4 +1,4 @@
-import { addWorkingDays, workingDayDelta, workingDaysBetween } from '../domain/calendar/date'
+import { addCalendarDays, addWorkingDays, fromLocalDate, workingDayDelta, workingDaysBetween } from '../domain/calendar/date'
 import { autoRoleForStage } from '../domain/capacity/auto-assignment'
 import { CommandHistory } from '../domain/commands/history'
 import { createEpic, createPerson, createRole, createStage, newId, nowISO } from '../domain/models/factories'
@@ -25,12 +25,13 @@ import type {
 } from '../domain/models/types'
 import { createQuarter } from '../domain/quarters/quarters'
 import { compactSchedule, detectScheduleConflicts, moveStages, normalizeSchedule, resizeStage, updateDerived } from '../domain/scheduling/engine'
+import { moveEpicSchedule } from '../domain/scheduling/epic-move'
 import { validateNewDependency } from '../domain/scheduling/graph'
-import { downloadWorkspace, parseWorkspaceExport, replaceWorkspaceAtomically, serializeWorkspace, validateReferences, type WorkspaceExportOptions } from '../infrastructure/files/workspace-transfer'
-import { PlannerRepository } from '../infrastructure/repositories/planner-repository'
+import { downloadWorkspace, parseWorkspaceExport, serializeWorkspace, validateReferences, type WorkspaceExportOptions } from '../infrastructure/files/workspace-transfer'
+import { ServerError, ServerPlannerRepository } from '../infrastructure/repositories/server-repository'
 import { cloneJson } from '../utils/clone'
 
-export type SaveStatus = 'saved' | 'saving' | 'error'
+export type SaveStatus = 'saved' | 'saving' | 'error' | 'conflict' | 'offline'
 
 export interface CalendarImpact {
   changedDurations: number
@@ -44,14 +45,26 @@ function validateExternalUrl(value?: string): void {
 }
 
 export const usePlannerStore = defineStore('planner', () => {
+  const route = useRoute()
+  const code = computed(() => String(route.params.code || ''))
+  const mode = computed(() => route.params.mode === 'edit' ? 'edit' : 'view')
   const data = ref<PlannerData>()
   const initialized = ref(false)
   const loading = ref(false)
+  const canEdit = ref(false)
   const saveStatus = ref<SaveStatus>('saved')
   const lastError = ref<string>()
+  const remoteRevision = ref<number>()
+  const pendingDraft = ref<PlannerData>()
   const historyRevision = ref(0)
   const history = markRaw(new CommandHistory<PlannerData>(100))
-  const repository = markRaw(new PlannerRepository())
+  let repository: ServerPlannerRepository | undefined
+  let loadedCode = ''
+  let initializePromise: Promise<void> | undefined
+  let commandQueue: Promise<unknown> = Promise.resolve()
+  let pendingWrite: { before: PlannerData; draft: PlannerData; label?: string; backupReason?: BackupReason } | undefined
+  let pollPromise: Promise<void> | undefined
+  let nextPollAt = 0
   const backups = ref<BackupSnapshot[]>([])
   const activeBaselineId = ref<Id>()
   const storagePersisted = ref<boolean>()
@@ -59,141 +72,230 @@ export const usePlannerStore = defineStore('planner', () => {
   const storageQuota = ref(0)
   const lastIntegrityCheck = ref<{ status: 'ok' | 'error'; message: string; checkedAt: string }>()
   const recoveryRequired = ref(false)
-  const activeBaselineStorageKey = 'delivery-planner:active-baseline:v1'
-  if (import.meta.client) activeBaselineId.value = localStorage.getItem(activeBaselineStorageKey) || undefined
+  const readOnly = computed(() => mode.value !== 'edit' || !canEdit.value || saveStatus.value === 'conflict' || saveStatus.value === 'offline')
+  const activeBaselineStorageKey = computed(() => `delivery-planner:${code.value}:active-baseline:v1`)
   watch(activeBaselineId, (value) => {
-    if (!import.meta.client) return
-    if (value) localStorage.setItem(activeBaselineStorageKey, value)
-    else localStorage.removeItem(activeBaselineStorageKey)
+    if (!import.meta.client || !code.value) return
+    if (value) localStorage.setItem(activeBaselineStorageKey.value, value)
+    else localStorage.removeItem(activeBaselineStorageKey.value)
   })
 
-  const canUndo = computed(() => { void historyRevision.value; return history.canUndo })
-  const canRedo = computed(() => { void historyRevision.value; return history.canRedo })
+  const canUndo = computed(() => { void historyRevision.value; return !readOnly.value && history.canUndo })
+  const canRedo = computed(() => { void historyRevision.value; return !readOnly.value && history.canRedo })
   const conflicts = computed(() => data.value
     ? detectScheduleConflicts(data.value.stages, data.value.dependencies, data.value.calendar)
     : [])
 
-  async function refreshStorageInfo(): Promise<void> {
-    if (!import.meta.client || !navigator.storage) return
-    try {
-      storagePersisted.value = await navigator.storage.persisted()
-      if (!storagePersisted.value && navigator.storage.persist) storagePersisted.value = await navigator.storage.persist()
-      const estimate = await navigator.storage.estimate()
-      storageUsage.value = estimate.usage ?? 0
-      storageQuota.value = estimate.quota ?? 0
-    } catch {
-      storagePersisted.value = false
-    }
-  }
-
   async function initialize(): Promise<void> {
-    if (initialized.value || loading.value) return
+    const targetCode = code.value
+    if (!targetCode) throw new Error('Код workspace не указан')
+    if (initialized.value && loadedCode === targetCode) return
+    if (initializePromise && loadedCode === targetCode) return initializePromise
+    loadedCode = targetCode
+    initialized.value = false
     loading.value = true
-    try {
-      data.value = await repository.initialize()
+    data.value = undefined
+    backups.value = []
+    canEdit.value = false
+    pendingDraft.value = undefined
+    pendingWrite = undefined
+    remoteRevision.value = undefined
+    history.clear()
+    historyRevision.value += 1
+    repository = new ServerPlannerRepository(targetCode)
+    const currentRepository = repository
+    initializePromise = (async () => {
       try {
-        validateReferences(data.value)
-        const checkedAt = nowISO()
-        lastIntegrityCheck.value = { status: 'ok', message: 'Ссылочная целостность подтверждена', checkedAt }
-        await repository.updateIntegrityMetadata(data.value.workspace.id, {
-          lastIntegrityCheckAt: checkedAt,
-          lastIntegrityStatus: 'ok',
-          lastIntegrityMessage: lastIntegrityCheck.value.message,
-        })
+        const loaded = await currentRepository.load()
+        validateReferences(loaded)
+        if (loadedCode !== targetCode) return
+        data.value = loaded
+        canEdit.value = await currentRepository.canEdit()
+        if (mode.value === 'edit' && canEdit.value) backups.value = await currentRepository.listBackups()
+        activeBaselineId.value = import.meta.client ? localStorage.getItem(activeBaselineStorageKey.value) || undefined : undefined
+        if (activeBaselineId.value && !loaded.baselines.some(item => item.id === activeBaselineId.value)) activeBaselineId.value = undefined
+        lastIntegrityCheck.value = { status: 'ok', message: 'Ссылочная целостность подтверждена', checkedAt: nowISO() }
+        initialized.value = true
+        saveStatus.value = 'saved'
       } catch (error) {
-        const checkedAt = nowISO()
-        const message = error instanceof Error ? error.message : 'Ошибка проверки данных'
-        lastIntegrityCheck.value = { status: 'error', message, checkedAt }
-        await repository.updateIntegrityMetadata(data.value.workspace.id, {
-          lastIntegrityCheckAt: checkedAt,
-          lastIntegrityStatus: 'error',
-          lastIntegrityMessage: message,
-        })
-        recoveryRequired.value = true
+        lastError.value = error instanceof Error ? error.message : 'Не удалось открыть workspace'
+        saveStatus.value = 'error'
+        throw error
+      } finally {
+        if (loadedCode === targetCode) { loading.value = false; initializePromise = undefined }
       }
-      backups.value = await repository.listBackups()
-      if (activeBaselineId.value && !data.value.baselines.some(item => item.id === activeBaselineId.value)) activeBaselineId.value = undefined
-      if (await repository.shouldCreateDailyBackup(data.value.workspace.id, data.value.workspace.revision)) {
-        await repository.createBackup(data.value, 'daily')
-        backups.value = await repository.listBackups()
-      }
-      initialized.value = true
-      saveStatus.value = 'saved'
-      // Storage persistence is advisory. Firefox may keep the permission
-      // request pending, so it must never block opening the local workspace.
-      void refreshStorageInfo()
-    } catch (error) {
-      lastError.value = error instanceof Error ? error.message : 'Не удалось открыть локальное хранилище'
-      saveStatus.value = 'error'
-      throw error
-    } finally {
-      loading.value = false
-    }
+    })()
+    return initializePromise
   }
 
-  async function runCommand(label: string, mutate: (draft: PlannerData) => void): Promise<void> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const before = cloneJson(data.value)
-    const draft = cloneJson(data.value)
-    mutate(draft)
-    saveStatus.value = 'saving'
-    lastError.value = undefined
-    try {
-      await repository.save(draft)
-      data.value = draft
-      history.push(label, before, draft)
-      historyRevision.value += 1
-      saveStatus.value = 'saved'
-    } catch (error) {
-      lastError.value = error instanceof Error ? error.message : 'Ошибка сохранения'
-      saveStatus.value = 'error'
-      throw error
-    }
+  function requireRepository(): ServerPlannerRepository {
+    if (!repository || !data.value) throw new Error('Workspace ещё не загружен')
+    return repository
   }
-
+  function requireEditor(): void {
+    if (readOnly.value) throw new Error(saveStatus.value === 'conflict' ? 'План изменён в другом браузере. Сначала загрузите новую версию.' : 'Для изменения нужен режим редактирования и PIN')
+  }
+  function markSaveError(error: unknown, draft?: PlannerData): void {
+    lastError.value = error instanceof Error ? error.message : 'Ошибка сохранения'
+    saveStatus.value = error instanceof ServerError && error.status === 409 ? 'conflict' : error instanceof ServerError && error.status === 0 ? 'offline' : 'error'
+    if (error instanceof ServerError && error.status === 409) remoteRevision.value = error.currentRevision
+    if (draft) pendingDraft.value = draft
+  }
+  function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const queuedCode = loadedCode
+    const next = commandQueue.then(() => {
+      if (loadedCode !== queuedCode) throw new Error('Workspace сменился до выполнения команды')
+      return fn()
+    })
+    commandQueue = next.catch(() => undefined)
+    return next
+  }
+  async function runCommand(label: string, mutate: (draft: PlannerData) => void, backupReason?: BackupReason): Promise<void> {
+    return enqueue(async () => {
+      requireEditor()
+      const commandCode = loadedCode
+      const before = cloneJson(data.value!)
+      const draft = cloneJson(before)
+      mutate(draft)
+      saveStatus.value = 'saving'
+      lastError.value = undefined
+      try {
+        const saved = await requireRepository().save(draft, before.workspace.revision, backupReason)
+        if (loadedCode !== commandCode) return
+        data.value = saved
+        history.push(label, before, saved)
+        historyRevision.value += 1
+        pendingDraft.value = undefined
+        saveStatus.value = 'saved'
+        if (backupReason) void requireRepository().listBackups().then(items => { backups.value = items }).catch(() => undefined)
+      } catch (error) { if (loadedCode === commandCode) { if (error instanceof ServerError && error.status === 0) pendingWrite = { before, draft, label, backupReason }; markSaveError(error, draft) }; throw error }
+    })
+  }
   async function undo(): Promise<void> {
-    if (!data.value || !history.canUndo) return
-    const previous = history.undo(data.value)
-    saveStatus.value = 'saving'
-    try {
-      await repository.save(previous)
-      data.value = previous
-      historyRevision.value += 1
-      saveStatus.value = 'saved'
-    } catch (error) {
-      saveStatus.value = 'error'
-      lastError.value = error instanceof Error ? error.message : 'Не удалось отменить операцию'
-      throw error
-    }
+    return enqueue(async () => {
+      requireEditor()
+      if (!data.value || !history.canUndo) return
+      const commandCode = loadedCode
+      const before = data.value
+      const previous = history.undo(before)
+      saveStatus.value = 'saving'
+      try {
+        const saved = await requireRepository().save(previous, before.workspace.revision)
+        if (loadedCode !== commandCode) return
+        data.value = saved
+        historyRevision.value += 1
+        saveStatus.value = 'saved'
+      } catch (error) { if (loadedCode !== commandCode) throw error; history.redo(before); if (error instanceof ServerError && error.status === 0) pendingWrite = { before, draft: previous }; markSaveError(error, previous); throw error }
+    })
   }
-
   async function redo(): Promise<void> {
-    if (!data.value || !history.canRedo) return
-    const next = history.redo(data.value)
-    saveStatus.value = 'saving'
-    try {
-      await repository.save(next)
-      data.value = next
-      historyRevision.value += 1
-      saveStatus.value = 'saved'
-    } catch (error) {
-      saveStatus.value = 'error'
-      lastError.value = error instanceof Error ? error.message : 'Не удалось повторить операцию'
-      throw error
-    }
+    return enqueue(async () => {
+      requireEditor()
+      if (!data.value || !history.canRedo) return
+      const commandCode = loadedCode
+      const before = data.value
+      const next = history.redo(before)
+      saveStatus.value = 'saving'
+      try {
+        const saved = await requireRepository().save(next, before.workspace.revision)
+        if (loadedCode !== commandCode) return
+        data.value = saved
+        historyRevision.value += 1
+        saveStatus.value = 'saved'
+      } catch (error) { if (loadedCode !== commandCode) throw error; history.undo(before); if (error instanceof ServerError && error.status === 0) pendingWrite = { before, draft: next }; markSaveError(error, next); throw error }
+    })
+  }
+  async function retryPending(): Promise<void> {
+    return enqueue(async () => {
+      const commandCode = loadedCode
+      const pending = pendingWrite
+      if (!pending || saveStatus.value !== 'offline') return
+      saveStatus.value = 'saving'
+      try {
+        const saved = await requireRepository().save(pending.draft, pending.before.workspace.revision, pending.backupReason)
+        if (loadedCode !== commandCode) return
+        data.value = saved
+        if (pending.label) history.push(pending.label, pending.before, saved)
+        else history.clear()
+        historyRevision.value += 1
+        pendingWrite = undefined
+        pendingDraft.value = undefined
+        saveStatus.value = 'saved'
+      } catch (error) { markSaveError(error, pending.draft); throw error }
+    })
+  }
+  async function unlock(pin: string): Promise<void> {
+    const current = requireRepository()
+    await current.unlock(pin)
+    canEdit.value = true
+    backups.value = await current.listBackups()
+  }
+  async function lock(): Promise<void> {
+    await requireRepository().lock()
+    canEdit.value = false
+    backups.value = []
+    history.clear()
+    historyRevision.value += 1
+  }
+  async function checkForUpdates(): Promise<void> {
+    if (pollPromise) return pollPromise
+    if (!initialized.value || !repository || !data.value || saveStatus.value === 'saving' || saveStatus.value === 'conflict' || Date.now() < nextPollAt) return
+    const currentCode = loadedCode
+    const currentRepository = repository
+    pollPromise = (async () => {
+      try {
+        const { revision } = await currentRepository.revision()
+        if (mode.value === 'edit' && canEdit.value && !await currentRepository.canEdit()) { canEdit.value = false; backups.value = []; history.clear(); historyRevision.value += 1 }
+        nextPollAt = 0
+        if (currentCode !== loadedCode || !data.value || revision <= data.value.workspace.revision) return
+        if (mode.value === 'edit' && canEdit.value) { remoteRevision.value = revision; saveStatus.value = 'conflict'; return }
+        data.value = await currentRepository.load()
+        history.clear()
+        historyRevision.value += 1
+        saveStatus.value = 'saved'
+      } catch { nextPollAt = Date.now() + 60000 }
+      finally { pollPromise = undefined }
+    })()
+    return pollPromise
+  }
+  async function reloadLatest(): Promise<void> {
+    const latest = await requireRepository().load()
+    data.value = latest
+    pendingDraft.value = undefined
+    pendingWrite = undefined
+    remoteRevision.value = undefined
+    history.clear()
+    historyRevision.value += 1
+    saveStatus.value = 'saved'
+  }
+  function downloadPending(): void { if (pendingDraft.value) downloadWorkspace(pendingDraft.value) }
+
+  async function addEpic(title: string, changes: Partial<Pick<Epic, 'code' | 'status' | 'marker' | 'descriptionMarkdown' | 'startDate' | 'endDate'>> = {}): Promise<Epic> {
+    let created: Epic | undefined
+    await runCommand('Создать эпик', (draft) => {
+      const requestedChanges = { ...changes }
+      if (!('startDate' in changes) && !('endDate' in changes)) {
+        const today = fromLocalDate(new Date())
+        requestedChanges.startDate = today
+        requestedChanges.endDate = addCalendarDays(today, 3)
+      }
+      if (Boolean(requestedChanges.startDate) !== Boolean(requestedChanges.endDate)) throw new Error('Укажите обе даты эпика или оставьте обе пустыми')
+      if (requestedChanges.startDate && requestedChanges.endDate && requestedChanges.startDate > requestedChanges.endDate) throw new Error('Дата начала эпика позже окончания')
+      created = createEpic(draft.workspace.id, title, draft.epics.length)
+      Object.assign(created, requestedChanges)
+      draft.epics.push(created)
+    })
+    return created!
   }
 
-  async function addEpic(title: string): Promise<Epic> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const epic = createEpic(data.value.workspace.id, title, data.value.epics.length)
-    await runCommand('Создать эпик', draft => { draft.epics.push(epic) })
-    return epic
-  }
-
-  async function updateEpic(id: Id, changes: Partial<Pick<Epic, 'title' | 'code' | 'status' | 'marker' | 'descriptionMarkdown'>>): Promise<void> {
+  async function updateEpic(id: Id, changes: Partial<Pick<Epic, 'title' | 'code' | 'status' | 'marker' | 'descriptionMarkdown' | 'startDate' | 'endDate'>>): Promise<void> {
     await runCommand('Изменить эпик', (draft) => {
       const epic = draft.epics.find(item => item.id === id)
       if (!epic) throw new Error('Эпик не найден')
+      const startDate = changes.startDate === undefined && 'startDate' in changes ? undefined : changes.startDate ?? epic.startDate
+      const endDate = changes.endDate === undefined && 'endDate' in changes ? undefined : changes.endDate ?? epic.endDate
+      if (Boolean(startDate) !== Boolean(endDate)) throw new Error('Укажите обе даты эпика или оставьте обе пустыми')
+      if (startDate && endDate && startDate > endDate) throw new Error('Дата начала эпика позже окончания')
       Object.assign(epic, changes, { updatedAt: nowISO() })
     })
   }
@@ -205,22 +307,16 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function addActivityType(input: { name: string; slug: string; colorToken: string }): Promise<ActivityType> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const name = input.name.trim()
-    const slug = input.slug.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-')
-    if (!name || !slug) throw new Error('Название и slug обязательны')
-    if (data.value.activityTypes.some(item => item.slug === slug)) throw new Error('Такой slug уже существует')
-    const activityType: ActivityType = {
-      id: newId('activity'),
-      workspaceId: data.value.workspace.id,
-      name,
-      slug,
-      colorToken: input.colorToken,
-      sortOrder: data.value.activityTypes.length,
-      isActive: true,
-    }
-    await runCommand('Создать activity type', draft => { draft.activityTypes.push(activityType) })
-    return activityType
+    let created: ActivityType | undefined
+    await runCommand('Создать activity type', (draft) => {
+      const name = input.name.trim()
+      const slug = input.slug.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-')
+      if (!name || !slug) throw new Error('Название и slug обязательны')
+      if (draft.activityTypes.some(item => item.slug === slug)) throw new Error('Такой slug уже существует')
+      created = { id: newId('activity'), workspaceId: draft.workspace.id, name, slug, colorToken: input.colorToken, sortOrder: draft.activityTypes.length, isActive: true }
+      draft.activityTypes.push(created)
+    })
+    return created!
   }
 
   async function updateActivityType(id: Id, changes: Partial<Pick<ActivityType, 'name' | 'colorToken' | 'isActive'>>): Promise<void> {
@@ -234,7 +330,7 @@ export const usePlannerStore = defineStore('planner', () => {
 
   async function deleteActivityType(id: Id): Promise<void> {
     if (data.value?.stages.some(stage => stage.activityTypeId === id)) throw new Error('Activity type используется этапами; его можно архивировать')
-    await runCommand('Удалить activity type', draft => { draft.activityTypes = draft.activityTypes.filter(item => item.id !== id) })
+    await runCommand('Удалить activity type', draft => { draft.activityTypes = draft.activityTypes.filter(item => item.id !== id) }, 'before_delete')
   }
 
   async function reorderEpics(ids: Id[]): Promise<void> {
@@ -247,7 +343,6 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function deleteEpic(id: Id): Promise<void> {
-    await createBackup('before_delete')
     await runCommand('Удалить эпик', (draft) => {
       const stageIds = new Set(draft.stages.filter(stage => stage.epicId === id).map(stage => stage.id))
       draft.dependencies = draft.dependencies.filter(dependency => !stageIds.has(dependency.predecessorStageId) && !stageIds.has(dependency.successorStageId))
@@ -255,7 +350,7 @@ export const usePlannerStore = defineStore('planner', () => {
       draft.assignments = draft.assignments.filter(assignment => !stageIds.has(assignment.stageId))
       draft.workItems = draft.workItems.filter(item => item.epicId !== id)
       draft.epics = draft.epics.filter(epic => epic.id !== id)
-    })
+    }, 'before_delete')
   }
 
   async function addStage(input: {
@@ -266,28 +361,24 @@ export const usePlannerStore = defineStore('planner', () => {
     startDate: ISODate
     endDate?: ISODate
   }): Promise<Stage> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const epicStages = data.value.stages.filter(stage => stage.epicId === input.epicId)
-    const stage = createStage({
-      ...input,
-      workspaceId: data.value.workspace.id,
-      calendar: data.value.calendar,
-      sortOrder: epicStages.length,
-    })
+    let stage: Stage | undefined
     await runCommand('Создать этап', (draft) => {
       if (!draft.epics.some(epic => epic.id === input.epicId)) throw new Error('Эпик не найден')
-      const previous = draft.stages.filter(item => item.epicId === input.epicId).sort((a, b) => b.sortOrder - a.sortOrder)[0]
-      draft.stages.push(stage)
+      const epicStages = draft.stages.filter(item => item.epicId === input.epicId)
+      const previous = epicStages.sort((a, b) => b.sortOrder - a.sortOrder)[0]
+      const created = createStage({ ...input, workspaceId: draft.workspace.id, calendar: draft.calendar, sortOrder: epicStages.length })
+      stage = created
+      draft.stages.push(created)
       const autoRole = autoRoleForStage(
-        stage.kind,
-        draft.activityTypes.find(activityType => activityType.id === stage.activityTypeId),
+        created.kind,
+        draft.activityTypes.find(activityType => activityType.id === created.activityTypeId),
         draft.roles,
       )
       if (autoRole) {
         draft.assignments.push({
           id: newId('assignment'),
           workspaceId: draft.workspace.id,
-          stageId: stage.id,
+          stageId: created.id,
           targetType: 'role',
           targetId: autoRole.id,
           units: 1,
@@ -300,7 +391,7 @@ export const usePlannerStore = defineStore('planner', () => {
           workspaceId: draft.workspace.id,
           epicId: input.epicId,
           predecessorStageId: previous.id,
-          successorStageId: stage.id,
+          successorStageId: created.id,
           type: 'finish_to_start',
           lagWorkdays: 0,
           createdAt: nowISO(),
@@ -312,11 +403,11 @@ export const usePlannerStore = defineStore('planner', () => {
           if (index >= 0 && patch.after) draft.stages[index] = patch.after
         }
       }
-      for (const quarterId of stage.quarterIds) {
+      for (const quarterId of created.quarterIds) {
         if (!draft.quarters.some(quarter => quarter.id === quarterId)) draft.quarters.push(createQuarter(quarterId, draft.workspace.id))
       }
     })
-    return stage
+    return stage!
   }
 
   async function updateStage(id: Id, changes: Partial<Omit<Stage, 'id' | 'workspaceId' | 'createdAt'>>): Promise<void> {
@@ -339,14 +430,13 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function deleteStages(ids: Id[]): Promise<void> {
-    if (ids.length > 1) await createBackup('before_delete')
     const selected = new Set(ids)
     await runCommand(ids.length > 1 ? 'Удалить выбранные этапы' : 'Удалить этап', (draft) => {
       draft.dependencies = draft.dependencies.filter(dependency => !selected.has(dependency.predecessorStageId) && !selected.has(dependency.successorStageId))
       draft.stages = draft.stages.filter(stage => !selected.has(stage.id))
       draft.assignments = draft.assignments.filter(assignment => !selected.has(assignment.stageId))
       draft.workItems.forEach((item) => { if (item.stageId && selected.has(item.stageId)) item.stageId = undefined })
-    })
+    }, 'before_delete')
   }
 
   async function reorderStage(id: Id, epicId: Id, targetIndex: number): Promise<void> {
@@ -373,11 +463,9 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function move(stageIds: Id[], deltaWorkdays: number, mode: 'cascade' | 'free'): Promise<void> {
-    if (!data.value) return
-    const result = moveStages({ stageIds, deltaWorkdays, mode, ...data.value })
-    if (!result.ok) throw new Error(result.message)
-    if (result.patches.length === 0) return
     await runCommand(mode === 'cascade' ? 'Каскадный перенос' : 'Свободный перенос', (draft) => {
+      const result = moveStages({ stageIds, deltaWorkdays, mode, ...draft })
+      if (!result.ok) throw new Error(result.message)
       for (const patch of result.patches) {
         const index = draft.stages.findIndex(stage => stage.id === patch.id)
         if (index >= 0 && patch.after) draft.stages[index] = patch.after
@@ -385,12 +473,27 @@ export const usePlannerStore = defineStore('planner', () => {
     })
   }
 
+  async function moveEpic(id: Id, deltaCalendarDays: number): Promise<void> {
+    if (deltaCalendarDays === 0) return
+    await runCommand('Перенести эпик с этапами', (draft) => {
+      const index = draft.epics.findIndex(epic => epic.id === id)
+      if (index < 0) throw new Error('Эпик не найден')
+      const moved = moveEpicSchedule(draft.epics[index]!, draft.stages, deltaCalendarDays, draft.calendar)
+      const updatedAt = nowISO()
+      draft.epics[index] = { ...moved.epic, updatedAt }
+      draft.stages = moved.stages.map(stage => stage.epicId === id ? { ...stage, updatedAt } : stage)
+      for (const stage of draft.stages.filter(item => item.epicId === id)) {
+        for (const quarterId of stage.quarterIds) {
+          if (!draft.quarters.some(quarter => quarter.id === quarterId)) draft.quarters.push(createQuarter(quarterId, draft.workspace.id))
+        }
+      }
+    })
+  }
+
   async function resize(id: Id, startDate: ISODate, endDate: ISODate, mode: 'cascade' | 'free'): Promise<void> {
-    if (!data.value) return
-    const result = resizeStage({ stageId: id, startDate, endDate, mode, ...data.value })
-    if (!result.ok) throw new Error(result.message)
-    if (result.patches.length === 0) return
     await runCommand(mode === 'cascade' ? 'Каскадное изменение длительности' : 'Изменить длительность', (draft) => {
+      const result = resizeStage({ stageId: id, startDate, endDate, mode, ...draft })
+      if (!result.ok) throw new Error(result.message)
       for (const patch of result.patches) {
         const index = draft.stages.findIndex(stage => stage.id === patch.id)
         if (index >= 0 && patch.after) draft.stages[index] = patch.after
@@ -399,36 +502,33 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function addDependency(predecessorStageId: Id, successorStageId: Id, lagWorkdays = 0, mode: 'cascade' | 'free' = 'cascade'): Promise<Dependency> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const predecessor = data.value.stages.find(stage => stage.id === predecessorStageId)
-    if (!predecessor) throw new Error('Предшественник не найден')
-    const dependency: Dependency = {
-      id: newId('dependency'), workspaceId: data.value.workspace.id, epicId: predecessor.epicId,
-      predecessorStageId, successorStageId, type: 'finish_to_start', lagWorkdays, createdAt: nowISO(),
-    }
-    const validation = validateNewDependency(dependency, data.value.stages, data.value.dependencies)
-    if (!validation.valid) throw new Error(validation.reason)
-    const dependencies = [...data.value.dependencies, dependency]
-    const normalizationPatches: Array<{ id: string; after?: Stage }> = []
-    if (mode === 'cascade') {
-      const normalization = normalizeSchedule(data.value.stages, dependencies, data.value.calendar)
-      if (!normalization.ok) throw new Error(normalization.message)
-      normalizationPatches.push(...normalization.patches)
-    }
+    let dependency: Dependency | undefined
     await runCommand('Создать зависимость', (draft) => {
+      const predecessor = draft.stages.find(stage => stage.id === predecessorStageId)
+      if (!predecessor) throw new Error('Предшественник не найден')
+      dependency = {
+        id: newId('dependency'), workspaceId: draft.workspace.id, epicId: predecessor.epicId,
+        predecessorStageId, successorStageId, type: 'finish_to_start', lagWorkdays, createdAt: nowISO(),
+      }
+      const validation = validateNewDependency(dependency, draft.stages, draft.dependencies)
+      if (!validation.valid) throw new Error(validation.reason)
       draft.dependencies.push(dependency)
-      for (const patch of normalizationPatches) {
-        const index = draft.stages.findIndex(stage => stage.id === patch.id)
-        if (index >= 0 && patch.after) draft.stages[index] = patch.after
+      if (mode === 'cascade') {
+        const normalization = normalizeSchedule(draft.stages, draft.dependencies, draft.calendar)
+        if (!normalization.ok) throw new Error(normalization.message)
+        for (const patch of normalization.patches) {
+          const index = draft.stages.findIndex(stage => stage.id === patch.id)
+          if (index >= 0 && patch.after) draft.stages[index] = patch.after
+        }
       }
     })
-    return dependency
+    return dependency!
   }
 
   async function removeDependency(id: Id): Promise<void> {
     await runCommand('Удалить зависимость', (draft) => {
       draft.dependencies = draft.dependencies.filter(dependency => dependency.id !== id)
-    })
+    }, 'before_delete')
   }
 
   async function updateDependency(id: Id, lagWorkdays: number): Promise<void> {
@@ -459,7 +559,6 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function applyCalendar(calendar: WorkingCalendar, recalculateSchedule: boolean): Promise<void> {
-    await createBackup('before_calendar_change')
     await runCommand('Изменить рабочий календарь', (draft) => {
       draft.calendar = { ...calendar, revision: draft.calendar.revision + 1 }
       draft.stages = draft.stages.map((stage) => {
@@ -475,15 +574,13 @@ export const usePlannerStore = defineStore('planner', () => {
           if (index >= 0 && patch.after) draft.stages[index] = patch.after
         }
       }
-    })
+    }, 'before_calendar_change')
   }
 
   async function fixSchedule(): Promise<void> {
-    if (!data.value) return
-    const result = normalizeSchedule(data.value.stages, data.value.dependencies, data.value.calendar)
-    if (!result.ok) throw new Error(result.message)
-    if (result.patches.length === 0) return
     await runCommand('Исправить расписание', (draft) => {
+      const result = normalizeSchedule(draft.stages, draft.dependencies, draft.calendar)
+      if (!result.ok) throw new Error(result.message)
       for (const patch of result.patches) {
         const index = draft.stages.findIndex(stage => stage.id === patch.id)
         if (index >= 0 && patch.after) draft.stages[index] = patch.after
@@ -492,11 +589,10 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function compactStages(stageIds: Id[]): Promise<void> {
-    if (!data.value || stageIds.length === 0) return
-    const result = compactSchedule(stageIds, data.value.stages, data.value.dependencies, data.value.calendar)
-    if (!result.ok) throw new Error(result.message)
-    if (result.patches.length === 0) return
+    if (!stageIds.length) return
     await runCommand('Сжать цепочку', (draft) => {
+      const result = compactSchedule(stageIds, draft.stages, draft.dependencies, draft.calendar)
+      if (!result.ok) throw new Error(result.message)
       for (const patch of result.patches) {
         const index = draft.stages.findIndex(stage => stage.id === patch.id)
         if (index >= 0 && patch.after) draft.stages[index] = patch.after
@@ -509,12 +605,14 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function addRole(name: string, marker = '#2563eb'): Promise<Role> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    if (!name.trim()) throw new Error('Название роли обязательно')
-    const role = createRole(data.value.workspace.id, name, data.value.roles.length)
-    role.marker = marker
-    await runCommand('Создать роль', draft => { draft.roles.push(role) })
-    return role
+    let created: Role | undefined
+    await runCommand('Создать роль', (draft) => {
+      if (!name.trim()) throw new Error('Название роли обязательно')
+      created = createRole(draft.workspace.id, name, draft.roles.length)
+      created.marker = marker
+      draft.roles.push(created)
+    })
+    return created!
   }
 
   async function updateRole(id: Id, changes: Partial<Pick<Role, 'name' | 'marker' | 'isActive'>>): Promise<void> {
@@ -536,16 +634,18 @@ export const usePlannerStore = defineStore('planner', () => {
   async function deleteRole(id: Id): Promise<void> {
     const usage = roleUsage(id)
     if (usage.people || usage.assignments) throw new Error(`Роль используется: сотрудников ${usage.people}, назначений ${usage.assignments}`)
-    await runCommand('Удалить роль', draft => { draft.roles = draft.roles.filter(role => role.id !== id) })
+    await runCommand('Удалить роль', draft => { draft.roles = draft.roles.filter(role => role.id !== id) }, 'before_delete')
   }
 
   async function addPerson(input: { name: string; primaryRoleId: Id; roleIds?: Id[]; baseCapacityFte: number }): Promise<Person> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    validateCapacity(input.baseCapacityFte)
-    if (!data.value.roles.some(role => role.id === input.primaryRoleId)) throw new Error('Основная роль не найдена')
-    const person = createPerson({ ...input, workspaceId: data.value.workspace.id, sortOrder: data.value.people.length })
-    await runCommand('Создать сотрудника', draft => { draft.people.push(person) })
-    return person
+    let created: Person | undefined
+    await runCommand('Создать сотрудника', (draft) => {
+      validateCapacity(input.baseCapacityFte)
+      if (!draft.roles.some(role => role.id === input.primaryRoleId)) throw new Error('Основная роль не найдена')
+      created = createPerson({ ...input, workspaceId: draft.workspace.id, sortOrder: draft.people.length })
+      draft.people.push(created)
+    })
+    return created!
   }
 
   async function updatePerson(id: Id, changes: Partial<Pick<Person, 'name' | 'primaryRoleId' | 'roleIds' | 'baseCapacityFte' | 'isActive'>>): Promise<void> {
@@ -571,51 +671,53 @@ export const usePlannerStore = defineStore('planner', () => {
     await runCommand('Удалить сотрудника', (draft) => {
       draft.people = draft.people.filter(person => person.id !== id)
       draft.workItems.forEach((item) => { if (item.personId === id) item.personId = undefined })
-    })
+    }, 'before_delete')
   }
 
   async function upsertAssignment(input: { id?: Id; stageId: Id; targetType: 'person' | 'role'; targetId: Id; units: number; allocationFte: number }): Promise<Assignment> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const stage = data.value.stages.find(item => item.id === input.stageId)
-    if (!stage) throw new Error('Этап не найден')
-    if (stage.kind === 'milestone') throw new Error('Веха не создаёт нагрузку и не может иметь назначения')
-    validateCapacity(input.allocationFte)
-    if (!Number.isFinite(input.units) || input.units <= 0 || (input.targetType === 'role' && !Number.isInteger(input.units))) throw new Error('Units должно быть положительным целым числом')
-    if (input.targetType === 'person') {
-      const person = data.value.people.find(item => item.id === input.targetId)
-      if (!person) throw new Error('Сотрудник не найден')
-      if (input.allocationFte > person.baseCapacityFte) throw new Error(`Allocation превышает capacity сотрудника ${person.baseCapacityFte} FTE`)
-    } else if (!data.value.roles.some(role => role.id === input.targetId)) throw new Error('Роль не найдена')
-    const assignment: Assignment = {
-      id: input.id ?? newId('assignment'), workspaceId: data.value.workspace.id, stageId: input.stageId,
-      targetType: input.targetType, targetId: input.targetId, units: input.targetType === 'person' ? 1 : input.units,
-      allocationFte: input.allocationFte,
-    }
+    let assignment: Assignment | undefined
     await runCommand(input.id ? 'Изменить назначение' : 'Добавить назначение', (draft) => {
-      const index = draft.assignments.findIndex(item => item.id === assignment.id)
+      const stage = draft.stages.find(item => item.id === input.stageId)
+      if (!stage) throw new Error('Этап не найден')
+      if (stage.kind === 'milestone') throw new Error('Веха не создаёт нагрузку и не может иметь назначения')
+      validateCapacity(input.allocationFte)
+      if (!Number.isFinite(input.units) || input.units <= 0 || (input.targetType === 'role' && !Number.isInteger(input.units))) throw new Error('Units должно быть положительным целым числом')
+      if (input.targetType === 'person') {
+        const person = draft.people.find(item => item.id === input.targetId)
+        if (!person) throw new Error('Сотрудник не найден')
+        if (input.allocationFte > person.baseCapacityFte) throw new Error(`Allocation превышает capacity сотрудника ${person.baseCapacityFte} FTE`)
+      } else if (!draft.roles.some(role => role.id === input.targetId)) throw new Error('Роль не найдена')
+      assignment = {
+        id: input.id ?? newId('assignment'), workspaceId: draft.workspace.id, stageId: input.stageId,
+        targetType: input.targetType, targetId: input.targetId, units: input.targetType === 'person' ? 1 : input.units,
+        allocationFte: input.allocationFte,
+      }
+      const index = draft.assignments.findIndex(item => item.id === assignment!.id)
       if (index >= 0) draft.assignments[index] = assignment
       else draft.assignments.push(assignment)
     })
-    return assignment
+    return assignment!
   }
 
   async function deleteAssignment(id: Id): Promise<void> {
-    await runCommand('Удалить назначение', draft => { draft.assignments = draft.assignments.filter(item => item.id !== id) })
+    await runCommand('Удалить назначение', draft => { draft.assignments = draft.assignments.filter(item => item.id !== id) }, 'before_delete')
   }
 
   async function addWorkItem(input: { epicId: Id; stageId?: Id; title: string; personId?: Id; externalUrl?: string }): Promise<WorkItem> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    if (!input.title.trim()) throw new Error('Название задачи обязательно')
-    validateExternalUrl(input.externalUrl)
-    const timestamp = nowISO()
-    const item: WorkItem = {
-      id: newId('work-item'), workspaceId: data.value.workspace.id, epicId: input.epicId,
-      stageId: input.stageId, title: input.title.trim(), status: 'todo', personId: input.personId, externalUrl: input.externalUrl,
-      sortOrder: data.value.workItems.filter(value => value.epicId === input.epicId && value.stageId === input.stageId).length,
-      createdAt: timestamp, updatedAt: timestamp,
-    }
-    await runCommand('Создать задачу', draft => { draft.workItems.push(item) })
-    return item
+    let created: WorkItem | undefined
+    await runCommand('Создать задачу', (draft) => {
+      if (!input.title.trim()) throw new Error('Название задачи обязательно')
+      validateExternalUrl(input.externalUrl)
+      const timestamp = nowISO()
+      created = {
+        id: newId('work-item'), workspaceId: draft.workspace.id, epicId: input.epicId,
+        stageId: input.stageId, title: input.title.trim(), status: 'todo', personId: input.personId, externalUrl: input.externalUrl,
+        sortOrder: draft.workItems.filter(value => value.epicId === input.epicId && value.stageId === input.stageId).length,
+        createdAt: timestamp, updatedAt: timestamp,
+      }
+      draft.workItems.push(created)
+    })
+    return created!
   }
 
   async function updateWorkItem(id: Id, changes: Partial<Pick<WorkItem, 'title' | 'status' | 'personId' | 'stageId' | 'sortOrder' | 'externalUrl'>>): Promise<void> {
@@ -632,7 +734,7 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function deleteWorkItem(id: Id): Promise<void> {
-    await runCommand('Удалить задачу', draft => { draft.workItems = draft.workItems.filter(item => item.id !== id) })
+    await runCommand('Удалить задачу', draft => { draft.workItems = draft.workItems.filter(item => item.id !== id) }, 'before_delete')
   }
 
   async function bulkUpdateStages(stageIds: Id[], changes: Partial<Pick<Stage, 'status' | 'activityTypeId'>>): Promise<void> {
@@ -643,12 +745,12 @@ export const usePlannerStore = defineStore('planner', () => {
 
   async function copyStages(input: { stageIds: Id[]; targetEpicId: Id; targetStartDate?: ISODate; includeDependencies?: boolean; includeWorkItems?: boolean }): Promise<Id[]> {
     if (!data.value || input.stageIds.length === 0) return []
-    const sourceStages = data.value.stages.filter(stage => input.stageIds.includes(stage.id)).sort((a, b) => a.startDate.localeCompare(b.startDate) || a.sortOrder - b.sortOrder)
-    if (!sourceStages.length) return []
-    const anchor = sourceStages[0]!.startDate
-    const targetStart = input.targetStartDate ?? anchor
     const createdIds: Id[] = []
     await runCommand('Копировать этапы', (draft) => {
+      const sourceStages = draft.stages.filter(stage => input.stageIds.includes(stage.id)).sort((a, b) => a.startDate.localeCompare(b.startDate) || a.sortOrder - b.sortOrder)
+      if (!sourceStages.length) throw new Error('Этапы для копирования не найдены')
+      const anchor = sourceStages[0]!.startDate
+      const targetStart = input.targetStartDate ?? anchor
       const idMap = new Map<string, string>()
       for (const source of sourceStages) {
         const offset = workingDayDelta(anchor, source.startDate, draft.calendar)
@@ -678,25 +780,24 @@ export const usePlannerStore = defineStore('planner', () => {
   function exportJson(options?: WorkspaceExportOptions): void {
     if (!data.value) return
     downloadWorkspace(data.value, options)
-    void repository.updateIntegrityMetadata(data.value.workspace.id, { lastExportAt: nowISO() })
   }
 
   async function importJson(json: string): Promise<void> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    parseWorkspaceExport(json)
-    await createBackup('before_import')
-    saveStatus.value = 'saving'
-    try {
-      data.value = await replaceWorkspaceAtomically(repository, data.value, json)
-      backups.value = await repository.listBackups()
-      history.clear()
-      historyRevision.value += 1
-      saveStatus.value = 'saved'
-    } catch (error) {
-      saveStatus.value = 'error'
-      lastError.value = error instanceof Error ? error.message : 'Импорт не выполнен'
-      throw error
-    }
+    return enqueue(async () => {
+      requireEditor()
+      const commandCode = loadedCode
+      parseWorkspaceExport(json)
+      saveStatus.value = 'saving'
+      try {
+        const saved = await requireRepository().importJson(json, data.value!.workspace.revision)
+        if (loadedCode !== commandCode) return
+        data.value = saved
+        history.clear()
+        historyRevision.value += 1
+        saveStatus.value = 'saved'
+        void requireRepository().listBackups().then(items => { backups.value = items }).catch(() => undefined)
+      } catch (error) { if (loadedCode === commandCode) markSaveError(error); throw error }
+    })
   }
 
   async function loadDemo(): Promise<void> {
@@ -712,7 +813,7 @@ export const usePlannerStore = defineStore('planner', () => {
       const epic = createEpic(draft.workspace.id, 'CPM–CPA аукцион', 0)
       epic.code = 'ADS-01'
       epic.marker = '#2563eb'
-      epic.descriptionMarkdown = '## Цель\n\nЗапустить аукцион с параллельными **CPM** и **CPA** ветками.\n\n- Проверить механику ставок\n- Подготовить monitoring\n- Согласовать критерии запуска'
+      epic.descriptionMarkdown = 'Цель: запустить аукцион с параллельными CPM и CPA ветками.\n\nПроверить механику ставок\nПодготовить monitoring\nСогласовать критерии запуска'
       draft.epics.push(epic)
       const start = draft.quarters.sort((a, b) => a.startDate.localeCompare(b.startDate))[0]!.startDate
       const activity = (slug: string) => draft.activityTypes.find(type => type.slug === slug)!.id
@@ -735,8 +836,8 @@ export const usePlannerStore = defineStore('planner', () => {
       const release = make('Запуск аукциона', 'milestone', activity('release'), 25, 0, 5)
       draft.stages.push(research, cpmDev, cpmTest, cpaScope, cpaTest, release)
       research.descriptionMarkdown = 'Проверить гипотезы и зафиксировать ограничения механики.'
-      cpmDev.descriptionMarkdown = '## CPM branch\n\nРеализовать стратегию ставок и защитные лимиты.'
-      cpaScope.descriptionMarkdown = '## CPA branch\n\nИнтеграция конверсий и атрибуции.'
+      cpmDev.descriptionMarkdown = 'CPM branch\n\nРеализовать стратегию ставок и защитные лимиты.'
+      cpaScope.descriptionMarkdown = 'CPA branch\n\nИнтеграция конверсий и атрибуции.'
       const link = (predecessorStageId: string, successorStageId: string): Dependency => ({
         id: newId('dependency'), workspaceId: draft.workspace.id, epicId: epic.id,
         predecessorStageId, successorStageId, type: 'finish_to_start', lagWorkdays: 0, createdAt: nowISO(),
@@ -767,18 +868,16 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   async function clearPlan(): Promise<void> {
-    await createBackup('before_delete')
     await runCommand('Очистить план', (draft) => {
       draft.epics = []
       draft.stages = []
       draft.dependencies = []
       draft.assignments = []
       draft.workItems = []
-    })
+    }, 'before_delete')
   }
 
   async function resetWorkspace(): Promise<void> {
-    await createBackup('before_delete')
     await runCommand('Безопасно сбросить workspace', (draft) => {
       draft.epics = []
       draft.stages = []
@@ -796,7 +895,7 @@ export const usePlannerStore = defineStore('planner', () => {
         extraWorkingDays: [],
         revision: draft.calendar.revision + 1,
       }
-    })
+    }, 'before_delete')
     recoveryRequired.value = false
   }
 
@@ -812,20 +911,10 @@ export const usePlannerStore = defineStore('planner', () => {
       validateReferences(data.value)
       lastIntegrityCheck.value = { status: 'ok', message: 'Ссылки, даты и DAG корректны', checkedAt }
       recoveryRequired.value = false
-      await repository.updateIntegrityMetadata(data.value.workspace.id, {
-        lastIntegrityCheckAt: checkedAt,
-        lastIntegrityStatus: 'ok',
-        lastIntegrityMessage: lastIntegrityCheck.value.message,
-      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка проверки данных'
       lastIntegrityCheck.value = { status: 'error', message, checkedAt }
       recoveryRequired.value = true
-      await repository.updateIntegrityMetadata(data.value.workspace.id, {
-        lastIntegrityCheckAt: checkedAt,
-        lastIntegrityStatus: 'error',
-        lastIntegrityMessage: message,
-      })
       throw error
     }
   }
@@ -882,57 +971,48 @@ export const usePlannerStore = defineStore('planner', () => {
     await runCommand('Удалить baseline', (draft) => {
       draft.baselines = draft.baselines.filter(item => item.id !== id)
       draft.baselineStages = draft.baselineStages.filter(item => item.baselineId !== id)
-    })
+    }, 'before_delete')
     if (activeBaselineId.value === id) activeBaselineId.value = undefined
   }
 
   async function createBackup(reason: BackupReason = 'manual', name?: string): Promise<BackupSnapshot> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const backup = await repository.createBackup(data.value, reason, name)
-    backups.value = await repository.listBackups()
+    requireEditor()
+    const backup = await requireRepository().createBackup(reason, name)
+    backups.value = await requireRepository().listBackups()
     return backup
   }
 
   async function restoreBackup(id: Id): Promise<void> {
-    if (!data.value) throw new Error('Workspace ещё не загружен')
-    const backup = await repository.getBackup(id)
-    if (!backup) throw new Error('Backup не найден')
-    let restored: PlannerData
-    try {
-      restored = JSON.parse(backup.payload) as PlannerData
-      restored = {
-        ...restored,
-        workspace: { ...restored.workspace, schemaVersion: 3 },
-        baselines: restored.baselines ?? [],
-        baselineStages: restored.baselineStages ?? [],
-      }
-      validateReferences(restored)
-    } catch (error) {
-      throw new Error(`Backup повреждён: ${error instanceof Error ? error.message : 'некорректный payload'}`)
-    }
-    await createBackup('before_restore')
-    const current = cloneJson(data.value)
-    try {
-      await repository.replaceAll(restored)
-      data.value = restored
-      recoveryRequired.value = false
-      history.clear()
-      historyRevision.value += 1
-      backups.value = await repository.listBackups()
-    } catch (error) {
-      await repository.replaceAll(current)
-      throw error
-    }
+    return enqueue(async () => {
+      requireEditor()
+      const commandCode = loadedCode
+      saveStatus.value = 'saving'
+      try {
+        const saved = await requireRepository().restoreBackup(id, data.value!.workspace.revision)
+        if (loadedCode !== commandCode) return
+        data.value = saved
+        recoveryRequired.value = false
+        history.clear()
+        historyRevision.value += 1
+        saveStatus.value = 'saved'
+        void requireRepository().listBackups().then(items => { backups.value = items }).catch(() => undefined)
+      } catch (error) { if (loadedCode === commandCode) markSaveError(error); throw error }
+    })
   }
 
   async function deleteBackup(id: Id): Promise<void> {
-    await repository.deleteBackup(id)
-    if (data.value) backups.value = await repository.listBackups()
+    requireEditor()
+    await requireRepository().deleteBackup(id)
+    backups.value = await requireRepository().listBackups()
   }
 
-  function exportBackup(id: Id): void {
-    const backup = backups.value.find(item => item.id === id)
-    if (!backup) throw new Error('Backup не найден')
+  async function getBackup(id: Id): Promise<BackupSnapshot> {
+    requireEditor()
+    return requireRepository().getBackup(id)
+  }
+
+  async function exportBackup(id: Id): Promise<void> {
+    const backup = await getBackup(id)
     const restored = JSON.parse(backup.payload) as PlannerData
     const blob = new Blob([serializeWorkspace(restored)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -944,11 +1024,11 @@ export const usePlannerStore = defineStore('planner', () => {
   }
 
   return {
-    data, initialized, loading, saveStatus, lastError, canUndo, canRedo, conflicts,
+    data, code, mode, canEdit, readOnly, remoteRevision, pendingDraft, initialized, loading, saveStatus, lastError, canUndo, canRedo, conflicts,
     backups, activeBaselineId, storagePersisted, storageUsage, storageQuota, lastIntegrityCheck, recoveryRequired,
-    initialize, runCommand, undo, redo,
+    initialize, unlock, lock, checkForUpdates, reloadLatest, retryPending, downloadPending, runCommand, undo, redo,
     updateWorkspaceSettings, addActivityType, updateActivityType, deleteActivityType,
-    addEpic, updateEpic, reorderEpics, deleteEpic,
+    addEpic, updateEpic, reorderEpics, deleteEpic, moveEpic,
     addStage, updateStage, deleteStage, deleteStages, reorderStage, moveStageBetweenEpics, move, resize,
     addDependency, removeDependency, updateDependency,
     previewCalendar, applyCalendar, fixSchedule, compactStages,
@@ -958,7 +1038,7 @@ export const usePlannerStore = defineStore('planner', () => {
     addWorkItem, updateWorkItem, deleteWorkItem,
     bulkUpdateStages, copyStages,
     createBaseline, renameBaseline, deleteBaseline,
-    createBackup, restoreBackup, deleteBackup, exportBackup,
+    createBackup, restoreBackup, deleteBackup, getBackup, exportBackup,
     exportJson, importJson, loadDemo, clearPlan, resetWorkspace, runIntegrityCheck,
   }
 })

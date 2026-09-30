@@ -45,8 +45,11 @@ export interface Epic {
   workspaceId: Id
   title: string
   code?: string
+  /** Legacy JSON key retained for export compatibility; the value is plain text. */
   descriptionMarkdown: string
   status: EpicStatus
+  startDate?: ISODate
+  endDate?: ISODate
   marker?: string
   sortOrder: number
   createdAt: string
@@ -61,6 +64,7 @@ export interface Stage {
   kind: StageKind
   activityTypeId: Id
   status: StageStatus
+  /** Legacy JSON key retained for export compatibility; the value is plain text. */
   descriptionMarkdown: string
   startDate: ISODate
   endDate: ISODate

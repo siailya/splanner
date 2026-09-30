@@ -1,41 +1,21 @@
 # Архитектура
 
-## Поток изменений
+Nuxt работает как SPA (`ssr: false`). Интерфейс, календарь, граф зависимостей, FTE, baseline, фильтры, экспорт PNG/PDF и Undo/Redo остаются в браузере. Express 5 обслуживает собранную статику и API на том же origin. SQLite через `better-sqlite3` хранит целый `PlannerData` в JSON для каждого workspace, историю снимков и хеши токенов редактирования.
 
-```text
-Vue / DHTMLX event
-  → application command (Pinia)
-  → pure domain engine
-  → cloned PlannerData
-  → Dexie transaction
-  → Pinia commit
-  → DHTMLX/table render
-```
+## Поток изменения
 
-Источник истины — domain-модель, сохранённая в IndexedDB. DHTMLX отменяет собственный commit drag/link и получает состояние заново после успешной команды. Table вызывает те же `move`, `resize`, `updateStage` и bulk commands.
+1. Клиент загружает workspace по 16-символьному коду и получает revision.
+2. Редактор вводит четырёхзначный PIN. Express проверяет salted scrypt hash и выдаёт случайный токен в `HttpOnly`, `SameSite=Strict` cookie с 8-часовым сроком.
+3. Команда клиента рассчитывает новое состояние на свежей локальной копии. Запрос `PUT` передаёт весь `PlannerData` и `expectedRevision`.
+4. Сервер проверяет сессию, Origin, схему и связи. Транзакция сверяет revision, создаёт нужный snapshot прежнего состояния, записывает новое и увеличивает revision.
+5. Только после подтверждения клиент заменяет данные и обновляет историю Undo/Redo. При `409` данные другого редактора не переписываются.
 
-## Слои
+API находится в [server/app.ts](../server/app.ts), транзакции и миграция SQLite — в [server/database.ts](../server/database.ts), сетевой repository — в [app/infrastructure/repositories/server-repository.ts](../app/infrastructure/repositories/server-repository.ts).
 
-- `app/domain`: date-only calendar, DAG, Cascade/Free, capacity, baseline diff, модели и command history. Нет Vue, DOM и IndexedDB.
-- `app/stores`: use cases, атомарная session history на 100 команд, save status, recovery state.
-- `app/infrastructure/db`: Dexie schema v1→v2→v3.
-- `app/infrastructure/repositories`: транзакционный repository, rolling backups и integrity metadata.
-- `app/infrastructure/files`: Zod, migrations, semantic validation, full/quarter JSON.
-- `app/infrastructure/screenshots`: локальный Canvas PNG.
-- `app/components/gantt`: Community-compatible adapter, calendar styles, ghost cascade, baseline DOM overlay.
+## Просмотр и обновление
 
-## Scheduling
+Маршруты `/w/:code/view/*` и `/w/:code/edit/*` используют одни страницы. В режиме просмотра интерфейс отключает формы и перетаскивание; store запрещает запись, а сервер независимо требует действующую сессию. Видимая вкладка проверяет revision раз в 15 секунд и при возвращении фокуса. Просмотр загружает новую версию; редактор получает предупреждение и решает, когда загрузить её. WebSocket и автоматическое объединение изменений не используются.
 
-Плановые даты — `YYYY-MM-DD`, интервалы включительны. Finish-to-Start с lag 0 означает начало successor в следующий рабочий день после end predecessor. Cascade строит транзитивных successors, сдвигает их в topological order и нормализует ограничения нескольких predecessors. Free сохраняет конфликт как вычисляемое состояние.
+## Совместимость
 
-`updateDerived` не читает системные часы: это гарантирует детерминированный patch. Timestamp меняется на application layer.
-
-## Capacity
-
-Person load равен allocation FTE. Role load равен person load основной роли плюс `units × allocation` незакреплённого role demand. Milestone исключается. Расчёт всегда использует все активные эпики workspace, если пользователь явно не включил scope «только видимые».
-
-Кэш ключуется revision и диапазоном. Полный O(stages × days) recompute оставлен намеренно: он укладывается в 150 мс для 500 этапов и не создаёт риск частично инвалидированного кэша.
-
-## Privacy
-
-Нет сетевого persistence и export. DHTMLX fonts не загружаются извне: remote `@font-face` удаляется build plugin. PNG создаётся Canvas API, PDF — системной печатью браузера.
+Экспорт сохраняет формат v3, импорт принимает v1/v2/v3. Код, PIN и токены в JSON экспорта не входят. Внутренние `workspaceId` при импорте переназначаются текущему workspace. Dexie используется только для чтения прежнего IndexedDB при переносе; серверным источником данных является SQLite. База работает в WAL на локальном диске; один экземпляр приложения использует один файл.

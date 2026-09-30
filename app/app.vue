@@ -2,7 +2,7 @@
   <UApp>
     <NuxtErrorBoundary @error="handleError">
       <NuxtLayout>
-        <NuxtPage />
+        <NuxtPage :page-key="route => `${String(route.name)}:${String(route.params.code || '')}:${String(route.params.mode || '')}`" />
       </NuxtLayout>
 
       <template #error="{ error, clearError }">

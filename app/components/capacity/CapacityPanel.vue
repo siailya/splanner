@@ -13,7 +13,7 @@
         <button type="button" @click="ui.capacityScope = ui.capacityScope === 'workspace' ? 'visible' : 'workspace'">Сменить расчёт</button>
       </div>
     </header>
-    <div v-if="ui.capacityOpen && !roles.length" class="capacity-empty"><UIcon name="i-lucide-users" /><span>Добавьте роли и сотрудников в разделе «Команда».</span><NuxtLink to="/team">Открыть команду</NuxtLink></div>
+    <div v-if="ui.capacityOpen && !roles.length" class="capacity-empty"><UIcon name="i-lucide-users" /><span>Добавьте роли и сотрудников в разделе «Команда».</span><NuxtLink :to="workspacePath('/team')">Открыть команду</NuxtLink></div>
     <div v-else-if="ui.capacityOpen" ref="scrollElement" class="capacity-scroll" @scroll="onScroll">
       <div class="capacity-table" :style="tableStyle">
         <div class="capacity-row capacity-row--periods" :style="tableStyle">
@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+const workspacePath = useWorkspacePath()
 import type { CapacityCell, CapacityResult, CapacityRow } from '../../domain/capacity/engine'
 import type { Role } from '../../domain/models/types'
 import { useUiStore } from '../../stores/ui'

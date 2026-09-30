@@ -1,0 +1,111 @@
+import { readFileSync } from 'node:fs'
+import { expect, test } from '@playwright/test'
+
+const codes = JSON.parse(readFileSync('output/playwright/workspaces.json', 'utf8')) as { one: { code: string }, two: { code: string }, three: { code: string }, workflow: { code: string } }
+const view = (code = codes.one.code) => `/w/${code}/view/timeline`
+const edit = (code = codes.one.code) => `/w/${code}/edit/timeline`
+
+test('viewer can follow a link and cannot write through UI or API', async ({ browser }) => {
+  const viewer = await browser.newContext()
+  const page = await viewer.newPage()
+  await page.goto(view())
+  await expect(page.getByRole('heading', { name: 'План поставки' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Редактировать' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Загрузить демо' })).toHaveCount(0)
+  const loaded = await (await viewer.request.get(`/api/workspaces/${codes.one.code}`)).json()
+  const blocked = await viewer.request.put(`/api/workspaces/${codes.one.code}`, { data: { expectedRevision: loaded.data.workspace.revision, data: loaded.data } })
+  expect(blocked.status()).toBe(403)
+  await page.goto(`/w/${codes.one.code}/view/settings/data`)
+  await expect(page.getByText('Workspace на сервере')).toBeVisible()
+  await viewer.close()
+})
+
+test('PIN editing, another viewer, and stale concurrent writes', async ({ browser }) => {
+  const editor = await browser.newContext()
+  const second = await browser.newContext()
+  const editorPage = await editor.newPage()
+  const viewerPage = await second.newPage()
+  await editorPage.goto(edit())
+  await editorPage.getByLabel('PIN').fill('0042')
+  await editorPage.getByRole('button', { name: 'Открыть редактирование' }).click()
+  await expect(editorPage.getByRole('button', { name: 'Завершить редактирование' })).toBeVisible()
+  await viewerPage.goto(view())
+  if (await editorPage.getByRole('button', { name: 'Загрузить демо' }).count()) await editorPage.getByRole('button', { name: 'Загрузить демо' }).click()
+  await expect(editorPage.getByRole('row', { name: /CPM–CPA аукцион/ }).first()).toBeVisible()
+  await viewerPage.reload()
+  await expect(viewerPage.getByRole('row', { name: /CPM–CPA аукцион/ }).first()).toBeVisible()
+  await editorPage.getByRole('button', { name: 'Поделиться' }).click()
+  await expect(editorPage.getByRole('textbox', { name: 'Ссылка на просмотр' })).toHaveValue(new RegExp(`/w/${codes.one.code}/view/`))
+  await second.request.post(`/api/workspaces/${codes.one.code}/edit-session`, { data: { pin: '0042' } })
+  const state = await (await editor.request.get(`/api/workspaces/${codes.one.code}`)).json()
+  const oldRevision = state.data.workspace.revision
+  const changed = { ...state.data, workspace: { ...state.data.workspace, name: 'Another editor' } }
+  const first = await editor.request.put(`/api/workspaces/${codes.one.code}`, { data: { expectedRevision: oldRevision, data: changed } })
+  const stale = await second.request.put(`/api/workspaces/${codes.one.code}`, { data: { expectedRevision: oldRevision, data: changed } })
+  expect(first.status()).toBe(200)
+  expect(stale.status()).toBe(409)
+  await editor.close(); await second.close()
+})
+
+test('workspaces and PIN sessions are isolated', async ({ browser }) => {
+  const editor = await browser.newContext()
+  const page = await editor.newPage()
+  await page.goto(edit(codes.two.code))
+  await page.getByLabel('PIN').fill('1234')
+  await page.getByRole('button', { name: 'Открыть редактирование' }).click()
+  await expect(page.getByRole('button', { name: 'Завершить редактирование' })).toBeVisible()
+  await page.goto(view(codes.one.code))
+  const alpha = await (await editor.request.get(`/api/workspaces/${codes.one.code}`)).json()
+  await expect(page.getByText(alpha.data.workspace.name)).toBeVisible()
+  const crossWrite = await editor.request.put(`/api/workspaces/${codes.one.code}`, { data: { expectedRevision: alpha.data.workspace.revision, data: alpha.data } })
+  expect(crossWrite.status()).toBe(403)
+  await editor.close()
+})
+
+
+test('shared titles render as text in the Gantt HTML templates', async ({ page }) => {
+  await page.goto(view(codes.three.code))
+  await expect(page.getByRole('row', { name: /img src=x onerror/ })).toBeVisible()
+  expect(await page.locator('.gantt_grid img').count()).toBe(0)
+  expect(await page.evaluate(() => (window as typeof window & { __xss?: number }).__xss)).toBeUndefined()
+})
+
+
+test('editor keeps baseline, table, print, backup and JSON import', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Extended editing flow is covered in Chromium; access modes run in every engine')
+  const code = codes.workflow.code
+  await page.goto(edit(code))
+  await page.getByLabel('PIN').fill('2468')
+  await page.getByRole('button', { name: 'Открыть редактирование' }).click()
+  await page.getByRole('button', { name: 'Загрузить демо' }).click()
+  await expect(page.getByRole('row', { name: /CPM–CPA аукцион/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Создать baseline' }).click()
+  await page.getByLabel('Название').fill('E2E baseline')
+  await page.getByRole('button', { name: 'Создать snapshot' }).click()
+  await expect(page.getByLabel('Baseline для сравнения')).toHaveValue(/baseline-/)
+  await page.getByRole('link', { name: 'Таблица' }).click()
+  const stageRow = page.getByRole('link', { name: 'CPM: разработка стратегии', exact: true }).locator('xpath=ancestor::tr')
+  await expect(stageRow).toBeVisible()
+  await stageRow.getByLabel('Статус').selectOption('in_progress')
+  await page.goto(`/w/${code}/edit/print`)
+  await expect(page.getByRole('heading', { name: 'CPM–CPA аукцион' })).toBeVisible()
+  await page.goto(`/w/${code}/edit/settings/data`)
+  await page.getByPlaceholder('Название snapshot').fill('E2E backup')
+  await page.getByRole('button', { name: 'Создать backup' }).click()
+  await expect(page.getByText('E2E backup')).toBeVisible()
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Экспортировать всё' }).click()
+  const file = await (await downloadPromise).path()
+  expect(file).toBeTruthy()
+  await page.goto(edit(code))
+  await page.getByRole('button', { name: 'Действия с данными' }).click()
+  await page.getByRole('button', { name: 'Очистить план' }).click()
+  await page.getByRole('button', { name: 'Очистить план', exact: true }).last().click()
+  await expect(page.getByRole('heading', { name: 'Замените Excel живым таймлайном' })).toBeVisible()
+  await page.goto(`/w/${code}/edit/settings/data`)
+  await page.locator('input[type=file]').setInputFiles(file!)
+  await expect(page.locator('.import-preview').first()).toContainText('epics')
+  await page.getByRole('button', { name: 'Заменить workspace' }).click()
+  await page.goto(edit(code))
+  await expect(page.getByRole('row', { name: /CPM–CPA аукцион/ })).toBeVisible()
+})

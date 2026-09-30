@@ -49,7 +49,7 @@ Capacity engine — чистый domain-расчёт. Person load берётся
 
 ## Безопасность и приватность
 
-Приложение не отправляет workspace, PNG или JSON во внешние API. Markdown preview проходит sanitization и не исполняет raw HTML. DHTMLX fonts поставляются локально; runtime не зависит от Google Fonts. Пользовательские URL допускают только `http` и `https`.
+Приложение не отправляет workspace, PNG или JSON во внешние API. Описания отображаются как обычный текст; при вставке в HTML-подсказки он экранируется. DHTMLX fonts поставляются локально; runtime не зависит от Google Fonts. Пользовательские URL допускают только `http` и `https`.
 
 ## Основные каталоги
 

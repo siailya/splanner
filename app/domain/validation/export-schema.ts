@@ -34,6 +34,7 @@ export const plannerDataSchema = z.object({
   epics: z.array(z.object({
     id: z.string(), workspaceId: z.string(), title: z.string().min(1), code: z.string().optional(),
     descriptionMarkdown: z.string(), status: z.enum(['active', 'paused', 'done', 'archived']),
+    startDate: isoDate.optional(), endDate: isoDate.optional(),
     marker: z.string().optional(), sortOrder: z.number(), createdAt: timestamp, updatedAt: timestamp,
   })),
   stages: z.array(z.object({

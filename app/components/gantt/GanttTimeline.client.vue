@@ -10,12 +10,15 @@
 
 <script setup lang="ts">
 import type { ActivityType, BaselineStageSnapshot, Dependency, Epic, ISODate, Stage, TimelineScale, WorkingCalendar, WorkItem } from '../../domain/models/types'
-import { addCalendarDays, addWorkingDays, fromLocalDate, isWorkingDay, toLocalDate, workingDayDelta } from '../../domain/calendar/date'
+import { addCalendarDays, addWorkingDays, compareDates, fromLocalDate, isWorkingDay, toLocalDate, workingDayDelta, workingDaysBetween } from '../../domain/calendar/date'
 import { transitiveSuccessors } from '../../domain/scheduling/graph'
+import { epicPeriod } from '../../domain/models/epic-period'
 
 const props = defineProps<{
   epics: Epic[]
+  readOnly?: boolean
   stages: Stage[]
+  allStages: Stage[]
   activityTypes?: ActivityType[]
   dependencies: Dependency[]
   calendar: WorkingCalendar
@@ -35,6 +38,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   taskChange: [payload: { id: string; startDate: ISODate; endDate: ISODate; action: 'move' | 'resize'; alternateMode: boolean }]
+  epicMove: [payload: { id: string; deltaCalendarDays: number }]
   linkAdd: [payload: { source: string; target: string }]
   linkDelete: [id: string]
   editStage: [id: string]
@@ -47,6 +51,8 @@ const emit = defineEmits<{
   editDependency: [id: string]
   rangeCreate: [payload: { epicId: string; startDate: ISODate; endDate: ISODate }]
   stageSelect: [payload: { id: string; additive: boolean; range: boolean }]
+  stageContextMenu: [payload: { id: string; x: number; y: number }]
+  epicContextMenu: [payload: { id: string; x: number; y: number }]
   viewportChange: [payload: { x: number; y: number }]
 }>()
 
@@ -56,34 +62,56 @@ let instance: import('dhtmlx-gantt').GanttStatic | undefined
 let eventIds: string[] = []
 let dragCreateStart: { x: number; rowId: string } | undefined
 let alternateDuringDrag = false
+let milestoneDrag: { id: string; date: ISODate } | undefined
+let epicDragStartDate: ISODate | undefined
 let worktimeOverrideDates: ISODate[] = []
 let renderedViewKey: string | undefined
 let viewportRestoreFrame: number | undefined
 let initialViewportFrame: number | undefined
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
+}
+
 function viewKey(): string {
   return [props.rangeStart, props.rangeEnd, props.scale, props.gridWidth].join('|')
 }
 
+function timelineDate(date: ISODate, kind: Stage['kind']): Date {
+  const value = toLocalDate(date)
+  // Bars use day boundaries; a zero-duration diamond belongs in the day's center.
+  if (kind === 'milestone') value.setHours(12)
+  return value
+}
+
 function taskData() {
-  const epicRows = props.epics.map(epic => ({
-    id: `epic:${epic.id}`,
-    text: epic.title,
-    type: 'project',
-    open: !props.collapsedEpicIds.includes(epic.id),
-    readonly: true,
-    epicId: epic.id,
-    marker: epic.marker,
-    color: epic.marker ?? '#2563eb',
-    sortOrder: epic.sortOrder,
-    workDone: props.workItems?.filter(item => item.epicId === epic.id && item.status === 'done').length ?? 0,
-    workTotal: props.workItems?.filter(item => item.epicId === epic.id).length ?? 0,
-  }))
+  const epicRows = props.epics.map((epic) => {
+    const period = epicPeriod(epic, props.allStages)
+    return {
+      id: `epic:${epic.id}`,
+      text: escapeHtml(epic.title),
+      // DHTMLX derives project dates from rendered children. A parent task keeps the full epic period.
+      type: 'task',
+      ...(period ? {
+        start_date: toLocalDate(period.startDate),
+        end_date: toLocalDate(addCalendarDays(period.endDate, 1)),
+      } : {}),
+      open: !props.collapsedEpicIds.includes(epic.id),
+      readonly: props.readOnly,
+      epicId: epic.id,
+      marker: epic.marker,
+      color: epic.marker ?? '#2563eb',
+      durationWorkdays: period ? workingDaysBetween(period.startDate, period.endDate, props.calendar) : undefined,
+      sortOrder: epic.sortOrder,
+      workDone: props.workItems?.filter(item => item.epicId === epic.id && item.status === 'done').length ?? 0,
+      workTotal: props.workItems?.filter(item => item.epicId === epic.id).length ?? 0,
+    }
+  })
   const stageRows = props.stages.map(stage => ({
     id: stage.id,
-    text: stage.title,
-    start_date: toLocalDate(stage.startDate),
-    end_date: toLocalDate(addCalendarDays(stage.endDate, 1)),
+    text: escapeHtml(stage.title),
+    start_date: timelineDate(stage.startDate, stage.kind),
+    end_date: stage.kind === 'milestone' ? timelineDate(stage.startDate, stage.kind) : toLocalDate(addCalendarDays(stage.endDate, 1)),
     duration: stage.kind === 'milestone' ? 0 : stage.durationWorkdays,
     durationWorkdays: stage.durationWorkdays,
     type: stage.kind === 'milestone' ? 'milestone' : 'task',
@@ -93,7 +121,7 @@ function taskData() {
     status: stage.status,
     activityTypeId: stage.activityTypeId,
     locked: stage.locked,
-    readonly: stage.locked,
+    readonly: stage.locked || props.readOnly,
     color: props.activityTypes?.find(type => type.id === stage.activityTypeId)?.colorToken,
     workDone: props.workItems?.filter(item => item.stageId === stage.id && item.status === 'done').length ?? 0,
     workTotal: props.workItems?.filter(item => item.stageId === stage.id).length ?? 0,
@@ -117,8 +145,9 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   gantt.config.smart_rendering = true
   gantt.config.preserve_scroll = true
   gantt.config.initial_scroll = false
-  gantt.config.order_branch = true
-  gantt.config.order_branch_free = true
+  gantt.config.order_branch = !props.readOnly
+  gantt.config.order_branch_free = !props.readOnly
+  gantt.config.auto_types = false
   gantt.config.grid_width = props.gridWidth
   gantt.config.row_height = 42
   gantt.config.bar_height = 24
@@ -128,14 +157,14 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   gantt.config.end_date = toLocalDate(addCalendarDays(props.rangeEnd, 1))
   gantt.config.fit_tasks = false
   gantt.config.show_unscheduled = true
-  gantt.config.drag_links = true
-  gantt.config.drag_move = true
-  gantt.config.drag_resize = true
+  gantt.config.drag_links = !props.readOnly
+  gantt.config.drag_move = !props.readOnly
+  gantt.config.drag_resize = !props.readOnly
   gantt.config.drag_progress = false
   gantt.config.details_on_dblclick = false
   gantt.config.columns = [
     { name: 'text', label: 'Эпик / этап', tree: true, width: '*', min_width: 190, template: (task: Record<string, unknown>) => `${String(task.text)}${Number(task.workTotal) > 0 ? ` <span class="gantt-work-count">${String(task.workDone)}/${String(task.workTotal)}</span>` : ''}` },
-    { name: 'duration', label: 'Дни', align: 'center', width: 54, template: (task: Record<string, unknown>) => task.type === 'project' ? '' : task.kind === 'milestone' ? '—' : String(task.durationWorkdays ?? '') },
+    { name: 'duration', label: 'Дни', align: 'center', width: 54, template: (task: Record<string, unknown>) => task.kind === 'milestone' ? '—' : String(task.durationWorkdays ?? '—') },
     { name: 'lock', label: '', align: 'center', width: 38, template: (task: Record<string, unknown>) => task.locked ? '🔒' : '' },
   ]
   gantt.config.scales = props.scale === 'day'
@@ -157,6 +186,8 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   for (const extra of props.calendar.extraWorkingDays) gantt.setWorkTime({ date: toLocalDate(extra), hours: true })
   worktimeOverrideDates = [...new Set([...props.calendar.holidays, ...props.calendar.extraWorkingDays])]
 
+  gantt.templates.grid_row_class = (_start, _end, task) => String(task.id).startsWith('epic:') ? 'epic-row' : ''
+  gantt.templates.task_row_class = (_start, _end, task) => String(task.id).startsWith('epic:') ? 'epic-row' : ''
   gantt.templates.timeline_cell_class = (_task, date) => {
     const value = fromLocalDate(date)
     const classes = []
@@ -166,6 +197,7 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   }
   gantt.templates.scale_cell_class = date => !isWorkingDay(fromLocalDate(date), props.calendar) ? 'non-working-scale' : ''
   gantt.templates.task_class = (_start, _end, task: Record<string, unknown>) => {
+    if (String(task.id).startsWith('epic:')) return 'epic-bar'
     const classes = [`stage-${task.kind ?? 'task'}`, `status-${String(task.status ?? 'planned').replace('_', '-')}`]
     const activitySlug = props.activityTypes?.find(type => type.id === task.activityTypeId)?.slug
     if (activitySlug) classes.push(`activity-${activitySlug}`)
@@ -177,23 +209,54 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
     return classes.join(' ')
   }
   gantt.templates.link_class = (link: Record<string, unknown>) => props.conflictStageIds.includes(String(link.target)) ? 'conflict-link' : ''
+  gantt.templates.task_text = (_start, _end, task: Record<string, unknown>) => String(task.text)
   gantt.templates.tooltip_text = (_start, _end, task: Record<string, unknown>) => {
-    if (task.type === 'project') return `<strong>${String(task.text)}</strong>`
+    if (String(task.id).startsWith('epic:')) {
+      const epic = props.epics.find(item => item.id === String(task.id).slice(5))
+      if (!epic) return ''
+      const period = epicPeriod(epic, props.allStages)
+      const dates = period ? `<span>${period.startDate} — ${period.endDate} · ${workingDaysBetween(period.startDate, period.endDate, props.calendar)} раб. дн.</span>` : ''
+      const description = epic.descriptionMarkdown.trim() ? `<div class="planner-tooltip__description">${escapeHtml(epic.descriptionMarkdown)}</div>` : ''
+      return `<div class="planner-tooltip"><strong>${escapeHtml(epic.title)}</strong>${dates}${description}</div>`
+    }
     const stage = props.stages.find(item => item.id === task.id)
     if (!stage) return ''
     const activity = stage.activityTypeId.replace('activity-', '')
-    return `<div class="planner-tooltip"><strong>${stage.title}</strong><span>${stage.kind} · ${activity}</span><span>${stage.startDate} — ${stage.endDate}</span><span>${stage.kind === 'milestone' ? 'Веха' : `${stage.durationWorkdays} раб. дн.`}</span>${props.conflictStageIds.includes(stage.id) ? '<b>⚠ Нарушена зависимость</b>' : ''}</div>`
+    const description = stage.descriptionMarkdown.trim() ? `<div class="planner-tooltip__description">${escapeHtml(stage.descriptionMarkdown)}</div>` : ''
+    return `<div class="planner-tooltip"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.kind)} · ${escapeHtml(activity)}</span><span>${stage.startDate} — ${stage.endDate}</span><span>${stage.kind === 'milestone' ? 'Веха' : `${stage.durationWorkdays} раб. дн.`}</span>${props.conflictStageIds.includes(stage.id) ? '<b>⚠ Нарушена зависимость</b>' : ''}${description}</div>`
   }
 }
 
 function attachEvents(gantt: import('dhtmlx-gantt').GanttStatic) {
   eventIds = [
+    gantt.attachEvent('onBeforeTaskDrag', (id, mode) => {
+      milestoneDrag = undefined
+      epicDragStartDate = undefined
+      return !props.readOnly && (!String(id).startsWith('epic:') || mode === 'move')
+    }),
     gantt.attachEvent('onBeforeTaskChanged', (id, mode, _originalTask) => {
-      if (String(id).startsWith('epic:')) return false
+      if (String(id).startsWith('epic:')) {
+        const epicId = String(id).slice(5)
+        const epic = props.epics.find(item => item.id === epicId)
+        const period = epic && epicPeriod(epic, props.allStages)
+        const startDate = epicDragStartDate ?? fromLocalDate(gantt.getTask(id).start_date as Date)
+        if (!props.readOnly && mode === 'move' && period) {
+          const deltaCalendarDays = compareDates(startDate, period.startDate)
+          if (deltaCalendarDays !== 0) emit('epicMove', { id: epicId, deltaCalendarDays })
+        }
+        epicDragStartDate = undefined
+        previewCount.value = 0
+        clearCascadeGhosts()
+        return false
+      }
       const changedTask = gantt.getTask(id)
-      const startDate = fromLocalDate(changedTask.start_date as Date)
       const rawEnd = fromLocalDate(changedTask.end_date as Date)
       const stage = props.stages.find(item => item.id === String(id))
+      // DHTMLX rounds noon to a scale boundary on drop. Keep the day under the diamond.
+      const startDate = stage?.kind === 'milestone' && milestoneDrag?.id === String(id)
+        ? milestoneDrag.date
+        : fromLocalDate(changedTask.start_date as Date)
+      milestoneDrag = undefined
       const endDate = stage?.kind === 'milestone' ? startDate : addCalendarDays(rawEnd, -1)
       emit('taskChange', {
         id: String(id), startDate, endDate,
@@ -206,6 +269,22 @@ function attachEvents(gantt: import('dhtmlx-gantt').GanttStatic) {
       return false
     }),
     gantt.attachEvent('onTaskDrag', (id, mode, _task, _original, event) => {
+      if (String(id).startsWith('epic:') && mode === 'move') {
+        const epicId = String(id).slice(5)
+        const epic = props.epics.find(item => item.id === epicId)
+        const period = epic && epicPeriod(epic, props.allStages)
+        if (!period) return
+        // Capture the pointer's day before DHTMLX adjusts dates to working time on drop.
+        epicDragStartDate = fromLocalDate(gantt.roundDate({ date: _task.start_date as Date, unit: 'day', step: 1 }))
+        const delta = compareDates(epicDragStartDate, period.startDate)
+        _task.start_date = toLocalDate(epicDragStartDate)
+        _task.end_date = toLocalDate(addCalendarDays(period.endDate, delta + 1))
+        const stageIds = new Set(props.allStages.filter(stage => stage.epicId === epicId).map(stage => stage.id))
+        previewCount.value = 0
+        renderStageGhosts(stageIds, date => addCalendarDays(date, delta))
+        return
+      }
+      if (_task.kind === 'milestone') milestoneDrag = { id: String(id), date: fromLocalDate(_task.start_date as Date) }
       alternateDuringDrag = (event as MouseEvent).altKey
       if (mode === 'move' && (props.mode === 'cascade') !== (event as MouseEvent).altKey) {
         const successors = transitiveSuccessors([String(id)], props.dependencies)
@@ -217,14 +296,17 @@ function attachEvents(gantt: import('dhtmlx-gantt').GanttStatic) {
       }
     }),
     gantt.attachEvent('onBeforeLinkAdd', (_id, link) => {
+      if (props.readOnly || String(link.source).startsWith('epic:') || String(link.target).startsWith('epic:')) return false
       emit('linkAdd', { source: String(link.source), target: String(link.target) })
       return false
     }),
     gantt.attachEvent('onBeforeLinkDelete', (id) => {
+      if (props.readOnly) return false
       emit('linkDelete', String(id))
       return false
     }),
     gantt.attachEvent('onBeforeTaskMove', (id, parent, index) => {
+      if (props.readOnly) return false
       const target = String(parent)
       if (!String(id).startsWith('epic:') && target.startsWith('epic:')) {
         const stage = props.stages.find(item => item.id === String(id))
@@ -243,6 +325,7 @@ function attachEvents(gantt: import('dhtmlx-gantt').GanttStatic) {
       if (value.startsWith('epic:')) emit('epicCollapsed', { id: value.slice(5), collapsed: false })
     }),
     gantt.attachEvent('onLinkDblClick', (id) => {
+      if (props.readOnly) return false
       emit('editDependency', String(id))
       return false
     }),
@@ -271,19 +354,27 @@ function renderCascadeGhosts(draggedId: string, successorIds: Set<string>) {
   clearCascadeGhosts()
   const dragged = props.stages.find(item => item.id === draggedId)
   const draggedTask = instance.getTask(draggedId)
-  const layer = container.value.querySelector<HTMLElement>('.gantt_bars_area')
-  if (!dragged || !layer) return
+  if (!dragged) return
   const delta = workingDayDelta(dragged.startDate, fromLocalDate(draggedTask.start_date as Date), props.calendar)
-  for (const id of successorIds) {
-    const stage = props.stages.find(item => item.id === id)
+  renderStageGhosts(successorIds, date => addWorkingDays(date, delta, props.calendar))
+}
+
+function renderStageGhosts(stageIds: Set<string>, shiftDate: (date: ISODate) => ISODate) {
+  if (!instance || !container.value) return
+  clearCascadeGhosts()
+  const layer = container.value.querySelector<HTMLElement>('.gantt_bars_area')
+  if (!layer) return
+  for (const id of stageIds) {
+    const stage = props.allStages.find(item => item.id === id)
     if (!stage || !instance.isTaskExists(id)) continue
+    if (!instance.getTaskNode(id)) continue
     const task = instance.getTask(id)
-    const start = toLocalDate(addWorkingDays(stage.startDate, delta, props.calendar))
-    const endDate = stage.kind === 'milestone' ? start : toLocalDate(addCalendarDays(addWorkingDays(stage.endDate, delta, props.calendar), 1))
+    const start = timelineDate(shiftDate(stage.startDate), stage.kind)
+    const endDate = stage.kind === 'milestone' ? start : toLocalDate(addCalendarDays(shiftDate(stage.endDate), 1))
     const position = instance.getTaskPosition(task, start, endDate)
     const ghost = document.createElement('div')
     ghost.className = `gantt-cascade-ghost${stage.locked ? ' gantt-cascade-ghost--locked' : ''}`
-    ghost.style.left = `${position.left}px`
+    ghost.style.left = `${position.left - (stage.kind === 'milestone' ? 7 : 0)}px`
     ghost.style.top = `${position.top}px`
     ghost.style.width = `${stage.kind === 'milestone' ? 14 : Math.max(position.width, 4)}px`
     ghost.style.height = `${position.height}px`
@@ -334,12 +425,12 @@ function renderBaselineOverlays() {
   for (const snapshot of props.baselineSnapshots ?? []) {
     if (!instance.isTaskExists(snapshot.stageId)) continue
     const task = instance.getTask(snapshot.stageId)
-    const start = toLocalDate(snapshot.startDate)
+    const start = timelineDate(snapshot.startDate, snapshot.kind)
     const end = toLocalDate(addCalendarDays(snapshot.endDate, 1))
     const position = instance.getTaskPosition(task, start, snapshot.kind === 'milestone' ? start : end)
     const node = document.createElement('div')
     node.className = snapshot.kind === 'milestone' ? 'gantt-baseline gantt-baseline--milestone' : 'gantt-baseline'
-    node.style.left = `${position.left}px`
+    node.style.left = `${position.left - (snapshot.kind === 'milestone' ? 5 : 0)}px`
     node.style.top = `${position.top + position.height - 2}px`
     node.style.width = `${snapshot.kind === 'milestone' ? 10 : Math.max(position.width, 2)}px`
     node.title = `Baseline: ${snapshot.startDate} — ${snapshot.endDate}`
@@ -363,12 +454,12 @@ function pointerPosition(event: PointerEvent): { x: number; rowId: string } | un
 }
 
 function onPointerDown(event: PointerEvent) {
-  if (event.button !== 0) return
+  if (props.readOnly || event.button !== 0) return
   dragCreateStart = pointerPosition(event)
 }
 
 function onPointerUp(event: PointerEvent) {
-  if (!instance || !dragCreateStart) return
+  if (props.readOnly || !instance || !dragCreateStart) return
   const end = pointerPosition(event)
   const start = dragCreateStart
   dragCreateStart = undefined
@@ -389,6 +480,21 @@ function onDoubleClick(event: MouseEvent) {
   if (value.startsWith('epic:')) emit('editEpic', value.slice(5))
   else emit('editStage', value)
   event.preventDefault()
+}
+
+function onContextMenu(event: MouseEvent) {
+  if (props.readOnly) return
+  const target = event.target as HTMLElement
+  const row = target.closest<HTMLElement>('.gantt_task_line[task_id], .gantt_grid_data .gantt_row[task_id]')
+  const id = row?.getAttribute('task_id')
+  if (id?.startsWith('epic:') && props.epics.some(epic => epic.id === id.slice(5))) {
+    event.preventDefault()
+    emit('epicContextMenu', { id: id.slice(5), x: event.clientX, y: event.clientY })
+    return
+  }
+  if (!id || !props.stages.some(stage => stage.id === id)) return
+  event.preventDefault()
+  emit('stageContextMenu', { id, x: event.clientX, y: event.clientY })
 }
 
 function scrollToToday() {
@@ -440,9 +546,10 @@ onMounted(async () => {
   container.value?.addEventListener('pointerdown', onPointerDown)
   container.value?.addEventListener('pointerup', onPointerUp)
   container.value?.addEventListener('dblclick', onDoubleClick)
+  container.value?.addEventListener('contextmenu', onContextMenu)
 })
 
-watch(() => [props.epics, props.stages, props.dependencies, props.calendar, props.rangeStart, props.rangeEnd, props.scale, props.gridWidth, props.collapsedEpicIds, props.conflictStageIds, props.workItems, props.baselineSnapshots, props.baselineNewStageIds], render, { deep: true })
+watch(() => [props.readOnly, props.epics, props.stages, props.allStages, props.dependencies, props.calendar, props.rangeStart, props.rangeEnd, props.scale, props.gridWidth, props.collapsedEpicIds, props.conflictStageIds, props.workItems, props.baselineSnapshots, props.baselineNewStageIds], render, { deep: true })
 watch(() => [props.selectedStageIds, props.highlightedStageIds], syncVisualState, { deep: true })
 
 onBeforeUnmount(() => {
@@ -454,6 +561,7 @@ onBeforeUnmount(() => {
   container.value?.removeEventListener('pointerdown', onPointerDown)
   container.value?.removeEventListener('pointerup', onPointerUp)
   container.value?.removeEventListener('dblclick', onDoubleClick)
+  container.value?.removeEventListener('contextmenu', onContextMenu)
   instance.destructor()
   instance = undefined
 })

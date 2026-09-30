@@ -1,28 +1,15 @@
 # Документация Delivery Planner
 
-Delivery Planner — локальное SPA для квартального delivery-планирования. Backend отсутствует: рабочие данные хранятся в IndexedDB текущего браузерного профиля, а `localStorage` используется только для UI-настроек.
+Текущая версия состоит из Nuxt SPA, Express API и SQLite. Workspace создаёт администратор; просмотр доступен по коду, запись — после ввода четырёхзначного PIN. [README проекта](../README.md) содержит команды запуска, сборки, переноса и резервного копирования.
 
-## Для пользователей
+## Разделы
 
 - [Руководство пользователя](USER_GUIDE.md)
+- [HTTP API эпиков и этапов](HTTP_API.md)
 - [Backup и восстановление](BACKUP_GUIDE.md)
-- [Диагностика](TROUBLESHOOTING.md)
-
-## Для разработки и сопровождения
-
-- [Технический обзор](TECHNICAL_OVERVIEW.md)
+- [Production-эксплуатация](PRODUCTION_OPERATIONS.md)
 - [Архитектура](ARCHITECTURE.md)
 - [Схема данных](DATA_SCHEMA.md)
 - [Обратная совместимость](BACKWARD_COMPATIBILITY.md)
-- [Миграции](MIGRATIONS.md)
-- [Production-эксплуатация](PRODUCTION_OPERATIONS.md)
-- [Performance](PERFORMANCE.md)
-- [Compatibility matrix](COMPATIBILITY.md)
 
-## Релиз
-
-- [Acceptance matrix](release/ACCEPTANCE_MATRIX.md)
-- [Release checklist](release/RELEASE_CHECKLIST.md)
-- [ADR: DHTMLX Gantt Community](adr/0001-dhtmlx-gantt-community.md)
-
-Нормативное правило проекта: сохранённые workspace и ранее выгруженные JSON-файлы являются production-данными. Любое изменение модели или persistence должно следовать [контракту обратной совместимости](BACKWARD_COMPATIBILITY.md) и иметь миграцию и regression-тесты до релиза.
+Документы, в которых описано хранение в IndexedDB, относятся к прежнему локальному выпуску. Его данные можно скачать или перенести через экран «Данные и backup» на прежнем origin; оригинал не удаляется.

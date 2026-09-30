@@ -146,7 +146,7 @@ export async function downloadTimelinePng(data: PlannerData, options: TimelinePn
       context.fillStyle = '#cbd5e1'
       context.lineWidth = 1
       if (baseline.kind === 'milestone') {
-        context.translate(baselineX + DAY_WIDTH / 2, y + ROW_HEIGHT - 7)
+        context.translate(baselineX - 4 + DAY_WIDTH / 2, y + ROW_HEIGHT - 7)
         context.rotate(Math.PI / 4)
         context.strokeRect(-5, -5, 10, 10)
       } else {
@@ -163,7 +163,7 @@ export async function downloadTimelinePng(data: PlannerData, options: TimelinePn
     context.fillStyle = color
     if (row.stage.kind === 'milestone') {
       context.save()
-      context.translate(x + DAY_WIDTH / 2, y + ROW_HEIGHT / 2)
+      context.translate(x - 3 + DAY_WIDTH / 2, y + ROW_HEIGHT / 2)
       context.rotate(Math.PI / 4)
       context.fillRect(-7, -7, 14, 14)
       context.restore()

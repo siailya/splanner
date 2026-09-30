@@ -2,17 +2,17 @@
   <div class="content-page team-page">
     <div class="content-toolbar">
       <div><strong>{{ activePeople.length }} активных сотрудников</strong><span>{{ totalCapacity }} FTE общего capacity</span></div>
-      <div><UButton color="neutral" variant="outline" icon="i-lucide-badge-plus" label="Роль" @click="openRole()" /><UButton icon="i-lucide-user-plus" label="Сотрудник" :disabled="!activeRoles.length" @click="openPerson()" /></div>
+      <div v-if="!planner.readOnly"><UButton color="neutral" variant="outline" icon="i-lucide-badge-plus" label="Роль" @click="openRole()" /><UButton icon="i-lucide-user-plus" label="Сотрудник" :disabled="!activeRoles.length" @click="openPerson()" /></div>
     </div>
 
     <section class="team-summary">
       <article v-for="role in activeRoles" :key="role.id" class="role-card" :style="{ '--role-color': role.marker ?? '#2563eb' }">
-        <button class="role-card__edit" aria-label="Изменить роль" @click="openRole(role.id)"><UIcon name="i-lucide-pencil" /></button>
+        <button v-if="!planner.readOnly" class="role-card__edit" aria-label="Изменить роль" @click="openRole(role.id)"><UIcon name="i-lucide-pencil" /></button>
         <span class="role-card__marker" />
         <div><strong>{{ role.name }}</strong><span>{{ peopleForRole(role.id).length }} сотрудников</span></div>
         <b>{{ roleCapacity(role.id) }} FTE</b>
       </article>
-      <button class="role-card role-card--add" @click="openRole()"><UIcon name="i-lucide-plus" />Добавить роль</button>
+      <button v-if="!planner.readOnly" class="role-card role-card--add" @click="openRole()"><UIcon name="i-lucide-plus" />Добавить роль</button>
     </section>
 
     <section class="people-section">
@@ -26,7 +26,7 @@
           <span>{{ person.roleIds.filter(id => id !== person.primaryRoleId).map(roleName).join(', ') || '—' }}</span>
           <strong>{{ person.baseCapacityFte }} FTE</strong>
           <span>{{ planner.personUsage(person.id) }}</span>
-          <UButton color="neutral" variant="ghost" icon="i-lucide-pencil" aria-label="Изменить сотрудника" @click="openPerson(person.id)" />
+          <UButton v-if="!planner.readOnly" color="neutral" variant="ghost" icon="i-lucide-pencil" aria-label="Изменить сотрудника" @click="openPerson(person.id)" />
         </div>
       </div>
     </section>

@@ -17,9 +17,10 @@ export interface TimelineFilters {
   showArchived: boolean
 }
 
-const STORAGE_KEY = 'delivery-planner:ui-preferences:v1'
 
 export const useUiStore = defineStore('ui', () => {
+  const route = useRoute()
+  const storageKey = () => `delivery-planner:${String(route.params.code || '')}:ui-preferences:v1`
   const quarterView = ref<QuarterViewMode>('combined')
   const selectedQuarterId = ref<QuarterId>()
   const scale = ref<TimelineScale>('day')
@@ -37,7 +38,7 @@ export const useUiStore = defineStore('ui', () => {
 
   function hydrate(): void {
     if (!import.meta.client) return
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey())
     if (!raw) return
     try {
       const value = JSON.parse(raw) as Partial<{
@@ -65,13 +66,13 @@ export const useUiStore = defineStore('ui', () => {
       if (value.capacityScope) capacityScope.value = value.capacityScope
       if (value.expandedCapacityRoleIds) expandedCapacityRoleIds.value = value.expandedCapacityRoleIds
     } catch {
-      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(storageKey())
     }
   }
 
   function persist(): void {
     if (!import.meta.client) return
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    localStorage.setItem(storageKey(), JSON.stringify({
       quarterView: quarterView.value,
       selectedQuarterId: selectedQuarterId.value,
       scale: scale.value,
@@ -88,6 +89,10 @@ export const useUiStore = defineStore('ui', () => {
 
   if (import.meta.client) {
     hydrate()
+    watch(() => route.params.code, () => {
+      quarterView.value = 'combined'; selectedQuarterId.value = undefined; scale.value = 'day'; moveMode.value = 'cascade'
+      gridWidth.value = 360; collapsedEpicIds.value = []; clearFilters(); hydrate()
+    })
     watch([quarterView, selectedQuarterId, scale, moveMode, gridWidth, collapsedEpicIds, capacityOpen, capacityHeight, capacityScope, expandedCapacityRoleIds, () => ({ ...filters })], persist, { deep: true })
   }
 

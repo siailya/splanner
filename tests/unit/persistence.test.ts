@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { PlannerDatabase } from '../../app/infrastructure/db/database'
 import { PlannerRepository } from '../../app/infrastructure/repositories/planner-repository'
 import { createDefaultWorkspace, createEpic, createStage } from '../../app/domain/models/factories'
-import { parseWorkspaceExport, replaceWorkspaceAtomically, serializeWorkspace, validateReferences } from '../../app/infrastructure/files/workspace-transfer'
+import { createWorkspaceExport, parseWorkspaceExport, replaceWorkspaceAtomically, serializeWorkspace, validateReferences } from '../../app/infrastructure/files/workspace-transfer'
 
 const databases: PlannerDatabase[] = []
 function repository() {
@@ -35,6 +35,17 @@ describe('Dexie persistence and transfer', () => {
     expect(parsed.schemaVersion).toBe(3)
     expect(parsed.application).toBe('delivery-planner')
     expect(parsed.workspace).toEqual(data)
+  })
+
+  it('includes an epic with explicit dates in a quarter export without stages', () => {
+    const data = createDefaultWorkspace(new Date(2026, 6, 22))
+    const epic = createEpic(data.workspace.id, 'Ручной срок')
+    epic.startDate = '2026-07-01'
+    epic.endDate = '2026-07-31'
+    data.epics.push(epic)
+    const exported = createWorkspaceExport(data, { quarterIds: ['2026-Q3'] })
+    expect(exported.workspace.epics).toEqual([epic])
+    expect(parseWorkspaceExport(JSON.stringify(exported)).workspace.epics).toEqual([epic])
   })
 
   it('migrates an iteration-1 export through schema v3 without changing schedule', () => {

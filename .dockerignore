@@ -1,0 +1,16 @@
+.git
+.idea
+.vscode
+.nuxt
+.output
+node_modules
+output
+.playwright-cli
+data
+*.log
+dist
+playwright-report
+test-results
+*.tsbuildinfo
+.env
+.env.*

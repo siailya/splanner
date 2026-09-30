@@ -33,10 +33,10 @@
         <label v-for="column in optionalColumns" :key="column.key"><input v-model="visibleColumns" type="checkbox" :value="column.key" /> {{ column.label }}</label>
       </details>
       <span class="toolbar-spacer" />
-      <UButton color="neutral" variant="outline" icon="i-lucide-gantt-chart" label="Таймлайн" to="/timeline" />
+      <UButton color="neutral" variant="outline" icon="i-lucide-gantt-chart" label="Таймлайн" :to="workspacePath('/timeline')" />
     </div>
 
-    <div v-if="selectedIds.length" class="bulk-toolbar">
+    <div v-if="selectedIds.length && !planner.readOnly" class="bulk-toolbar">
       <strong>Выбрано: {{ selectedIds.length }}</strong>
       <select v-model="bulkStatus" @change="applyBulkStatus">
         <option value="">Статус…</option>
@@ -79,20 +79,20 @@
           <tr v-for="row in group.rows" :key="row.stage.id" :class="{ 'table-row--warning': row.conflict || row.overloaded }">
             <td class="check-column"><input type="checkbox" :checked="selectedIds.includes(row.stage.id)" :aria-label="`Выбрать ${row.stage.title}`" @change="toggleRow(row.stage.id)" /></td>
             <td><span class="epic-cell"><i :style="{ background: row.epic.marker }" />{{ row.epic.title }}</span></td>
-            <td><NuxtLink :to="{ path: '/timeline', query: { stage: row.stage.id } }">{{ row.stage.title }}</NuxtLink><span v-if="row.conflict" class="state-icon" title="Dependency conflict">⚠</span><span v-if="row.overloaded" class="state-icon" title="Capacity overload">!</span></td>
+            <td><NuxtLink :to="{ path: workspacePath('/timeline'), query: { stage: row.stage.id } }">{{ row.stage.title }}</NuxtLink><span v-if="row.conflict" class="state-icon" title="Dependency conflict">⚠</span><span v-if="row.overloaded" class="state-icon" title="Capacity overload">!</span></td>
             <td>{{ row.stage.kind }}</td>
             <td>
-              <select :value="row.stage.activityTypeId" aria-label="Activity type" @change="updateActivity(row.stage.id, $event)">
+              <select :disabled="planner.readOnly" :value="row.stage.activityTypeId" aria-label="Activity type" @change="updateActivity(row.stage.id, $event)">
                 <option v-for="item in planner.data?.activityTypes" :key="item.id" :value="item.id">{{ item.name }}</option>
               </select>
             </td>
             <td>
-              <select :value="row.stage.status" aria-label="Статус" @change="updateStatus(row.stage.id, $event)">
+              <select :disabled="planner.readOnly" :value="row.stage.status" aria-label="Статус" @change="updateStatus(row.stage.id, $event)">
                 <option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>
             </td>
-            <td><input :value="row.stage.startDate" type="date" aria-label="Дата начала" :disabled="row.stage.locked" @change="updateDate(row.stage.id, 'startDate', $event)" /></td>
-            <td><input :value="row.stage.endDate" type="date" aria-label="Дата окончания" :disabled="row.stage.locked || row.stage.kind === 'milestone'" @change="updateDate(row.stage.id, 'endDate', $event)" /></td>
+            <td><input :value="row.stage.startDate" type="date" aria-label="Дата начала" :disabled="planner.readOnly || row.stage.locked" @change="updateDate(row.stage.id, 'startDate', $event)" /></td>
+            <td><input :value="row.stage.endDate" type="date" aria-label="Дата окончания" :disabled="planner.readOnly || row.stage.locked || row.stage.kind === 'milestone'" @change="updateDate(row.stage.id, 'endDate', $event)" /></td>
             <td class="numeric">{{ row.stage.kind === 'milestone' ? '—' : row.stage.durationWorkdays }}</td>
             <td v-if="isVisible('assignments')">{{ row.assignmentText || '—' }}</td>
             <td v-if="isVisible('work')" class="numeric">{{ row.personDays.toFixed(1) }}</td>
@@ -100,8 +100,8 @@
             <td v-if="isVisible('dependencies')">{{ row.successors || '—' }}</td>
             <td v-if="isVisible('checklist')">{{ row.done }}/{{ row.total }}</td>
             <td v-if="isVisible('variance')"><span v-if="row.variance" :class="{ 'variance-changed': row.variance.state !== 'unchanged' }">{{ varianceText(row.variance) }}</span><span v-else>—</span></td>
-            <td><input type="checkbox" :checked="row.stage.locked" :aria-label="`Блокировка ${row.stage.title}`" @change="toggleLock(row.stage.id, $event)" /></td>
-            <td><UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-external-link" aria-label="Открыть на таймлайне" :to="{ path: '/timeline', query: { stage: row.stage.id } }" /></td>
+            <td><input type="checkbox" :disabled="planner.readOnly" :checked="row.stage.locked" :aria-label="`Блокировка ${row.stage.title}`" @change="toggleLock(row.stage.id, $event)" /></td>
+            <td><UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-external-link" aria-label="Открыть на таймлайне" :to="{ path: workspacePath('/timeline'), query: { stage: row.stage.id } }" /></td>
           </tr>
           </template>
         </tbody>
@@ -112,6 +112,7 @@
 </template>
 
 <script setup lang="ts">
+const workspacePath = useWorkspacePath()
 import { compareBaseline, type BaselineVariance } from '../domain/baseline/diff'
 import { calculateCapacity } from '../domain/capacity/engine'
 import type { ISODate, StageStatus } from '../domain/models/types'

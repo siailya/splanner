@@ -19,9 +19,9 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
   webServer: {
-    command: 'bun run dev --host 127.0.0.1 --port 3100',
-    url: 'http://127.0.0.1:3100/timeline',
-    reuseExistingServer: true,
+    command: 'bun run build && tsx tests/e2e/server.ts',
+    url: 'http://127.0.0.1:3100/health',
+    reuseExistingServer: false,
     timeout: 120_000,
   },
   outputDir: 'output/playwright/test-results',

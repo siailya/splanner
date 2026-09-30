@@ -39,6 +39,10 @@ function exportSlice(data: PlannerData, options?: WorkspaceExportOptions): Plann
   )
   const stageIds = new Set(stages.map(stage => stage.id))
   const epicIds = new Set(stages.map(stage => stage.epicId))
+  for (const epic of data.epics) {
+    if (requestedEpics && !requestedEpics.has(epic.id)) continue
+    if (epic.startDate && epic.endDate && (!options.quarterIds?.length || quarterIdsForRange(epic.startDate, epic.endDate).some(id => quarterIds.has(id)))) epicIds.add(epic.id)
+  }
   const assignments = data.assignments.filter(item => stageIds.has(item.stageId))
   const workItems = data.workItems.filter(item => epicIds.has(item.epicId) && (!item.stageId || stageIds.has(item.stageId)))
   const personIds = new Set([
@@ -170,6 +174,12 @@ export function validateReferences(data: PlannerData): void {
   const personIds = new Set(data.people.map(person => person.id))
   const allScoped = [data.calendar, ...data.quarters, ...data.epics, ...data.stages, ...data.dependencies, ...data.activityTypes, ...data.roles, ...data.people, ...data.assignments, ...data.workItems]
   if (allScoped.some(entity => entity.workspaceId !== workspaceId)) throw new Error('Найдены записи другого workspace')
+  for (const epic of data.epics) {
+    if (Boolean(epic.startDate) !== Boolean(epic.endDate)) throw new Error(`Эпик ${epic.id}: укажите обе даты или оставьте обе пустыми`)
+    if (epic.startDate && epic.endDate && compareDates(epic.startDate, epic.endDate) > 0) {
+      throw new Error(`Эпик ${epic.id}: дата начала позже даты окончания`)
+    }
+  }
   for (const stage of data.stages) {
     if (!epicIds.has(stage.epicId)) throw new Error(`Этап ${stage.id} ссылается на отсутствующий эпик`)
     if (!activityIds.has(stage.activityTypeId)) throw new Error(`Этап ${stage.id} ссылается на отсутствующий activity type`)

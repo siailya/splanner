@@ -5,6 +5,24 @@ export default defineNuxtConfig({
   nitro: {
     preset: 'static',
   },
+  vite: {
+    server: { proxy: { '/api': { target: 'http://127.0.0.1:3101', changeOrigin: true } } },
+    optimizeDeps: {
+      include: [
+        'dhtmlx-gantt', 'dexie',
+        '@nuxt/ui > prosemirror-state', '@nuxt/ui > prosemirror-transform',
+        '@nuxt/ui > prosemirror-model', '@nuxt/ui > prosemirror-view', '@nuxt/ui > prosemirror-gapcursor',
+      ],
+    },
+  },
+  hooks: {
+    'pages:extend'(pages) {
+      for (const page of [...pages]) {
+        if (page.path === '/' || page.path.startsWith('/w/')) continue
+        pages.push({ ...page, name: `workspace-${page.name}`, path: `/w/:code/:mode${page.path}` })
+      }
+    },
+  },
   modules: ['@nuxt/ui', '@pinia/nuxt', '@vueuse/nuxt'],
   ui: {
     fonts: false,
@@ -26,7 +44,7 @@ export default defineNuxtConfig({
       title: 'Delivery Planner',
       htmlAttrs: { lang: 'ru' },
       meta: [
-        { name: 'description', content: 'Локальный delivery-план с Gantt-таймлайном' },
+        { name: 'description', content: 'Сетевой delivery-план с Gantt-таймлайном' },
         { name: 'color-scheme', content: 'light dark' },
       ],
     },
@@ -34,14 +52,5 @@ export default defineNuxtConfig({
   typescript: {
     strict: true,
     typeCheck: true,
-  },
-  vite: {
-    optimizeDeps: {
-      include: [
-        'dhtmlx-gantt', 'dexie',
-        '@nuxt/ui > prosemirror-state', '@nuxt/ui > prosemirror-transform',
-        '@nuxt/ui > prosemirror-model', '@nuxt/ui > prosemirror-view', '@nuxt/ui > prosemirror-gapcursor',
-      ],
-    },
   },
 })

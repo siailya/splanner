@@ -1,0 +1,23 @@
+services:
+  planner:
+    build: .
+    init: true
+    restart: unless-stopped
+    environment:
+      PORT: "3101"
+      DB_PATH: /data/planner.sqlite
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to the browser-visible HTTPS origin}
+      JSON_LIMIT: ${JSON_LIMIT:-10mb}
+      SESSION_HOURS: ${SESSION_HOURS:-8}
+      TRUST_PROXY: "1"
+    ports:
+      - "3101:3101"
+    volumes:
+      - planner_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3101/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  planner_data:

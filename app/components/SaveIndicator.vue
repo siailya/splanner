@@ -9,8 +9,8 @@
 import { usePlannerStore } from '../stores/planner'
 
 const planner = usePlannerStore()
-const label = computed(() => ({ saved: 'Сохранено', saving: 'Сохранение', error: 'Ошибка' }[planner.saveStatus]))
+const label = computed(() => ({ saved: 'Сохранено', saving: 'Сохранение', error: 'Ошибка', conflict: 'Новая версия', offline: 'Нет связи' }[planner.saveStatus]))
 const icon = computed(() => ({
-  saved: 'i-lucide-cloud-check', saving: 'i-lucide-loader-circle', error: 'i-lucide-cloud-alert',
+  saved: 'i-lucide-cloud-check', saving: 'i-lucide-loader-circle', error: 'i-lucide-cloud-alert', conflict: 'i-lucide-cloud-alert', offline: 'i-lucide-cloud-alert',
 }[planner.saveStatus]))
 </script>
