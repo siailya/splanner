@@ -118,6 +118,7 @@ function taskData() {
       readonly: props.readOnly,
       epicId: epic.id,
       marker: epic.marker,
+      fillStyle: epic.fillStyle,
       color: epic.marker ?? '#2563eb',
       durationWorkdays: period ? workingDaysBetween(period.startDate, period.endDate, props.calendar) : undefined,
       sortOrder: epic.sortOrder,
@@ -218,7 +219,7 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   }
   gantt.templates.scale_cell_class = date => !isWorkingDay(fromLocalDate(date), props.calendar) ? 'non-working-scale' : ''
   gantt.templates.task_class = (_start, _end, task: Record<string, unknown>) => {
-    if (String(task.id).startsWith('epic:')) return 'epic-bar'
+    if (String(task.id).startsWith('epic:')) return task.fillStyle === 'striped' ? 'epic-bar epic-striped' : 'epic-bar'
     const classes = [`stage-${task.kind ?? 'task'}`, `status-${String(task.status ?? 'planned').replace('_', '-')}`]
     const activitySlug = props.activityTypes?.find(type => type.id === task.activityTypeId)?.slug
     if (activitySlug) classes.push(`activity-${activitySlug}`)

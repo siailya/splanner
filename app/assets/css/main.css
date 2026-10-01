@@ -163,6 +163,7 @@ textarea {
 .gantt_task_line.activity-integration { background-color: #14b8a6; }
 .gantt_task_line.activity-release { background-color: #22c55e; }
 .gantt_task_line.activity-other { background-color: #64748b; }
+.gantt_task_line.epic-striped,
 .gantt_task_line.stage-scope { border: 1px dashed rgb(255 255 255 / .75); background-image: repeating-linear-gradient(135deg, transparent, transparent 5px, rgb(255 255 255 / .16) 5px, rgb(255 255 255 / .16) 10px); }
 .gantt_task_line.status-done { opacity: .58; }
 .gantt_task_line.status-blocked, .gantt_task_line.has-conflict { outline: 2px solid #ef4444; outline-offset: 1px; }

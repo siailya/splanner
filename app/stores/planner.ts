@@ -270,7 +270,7 @@ export const usePlannerStore = defineStore('planner', () => {
   }
   function downloadPending(): void { if (pendingDraft.value) downloadWorkspace(pendingDraft.value) }
 
-  async function addEpic(title: string, changes: Partial<Pick<Epic, 'code' | 'status' | 'marker' | 'descriptionMarkdown' | 'startDate' | 'endDate'>> = {}): Promise<Epic> {
+  async function addEpic(title: string, changes: Partial<Pick<Epic, 'code' | 'status' | 'marker' | 'fillStyle' | 'descriptionMarkdown' | 'startDate' | 'endDate'>> = {}): Promise<Epic> {
     let created: Epic | undefined
     await runCommand('Создать эпик', (draft) => {
       const requestedChanges = { ...changes }
@@ -288,7 +288,7 @@ export const usePlannerStore = defineStore('planner', () => {
     return created!
   }
 
-  async function updateEpic(id: Id, changes: Partial<Pick<Epic, 'title' | 'code' | 'status' | 'marker' | 'descriptionMarkdown' | 'startDate' | 'endDate'>>): Promise<void> {
+  async function updateEpic(id: Id, changes: Partial<Pick<Epic, 'title' | 'code' | 'status' | 'marker' | 'fillStyle' | 'descriptionMarkdown' | 'startDate' | 'endDate'>>): Promise<void> {
     await runCommand('Изменить эпик', (draft) => {
       const epic = draft.epics.find(item => item.id === id)
       if (!epic) throw new Error('Эпик не найден')

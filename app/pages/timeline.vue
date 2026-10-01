@@ -217,7 +217,8 @@
         <label class="field field--wide"><span>Название *</span><input v-model="epicForm.title" required autofocus placeholder="Например, CPM–CPA аукцион" /></label>
         <label class="field"><span>Короткий код</span><input v-model="epicForm.code" placeholder="ADS-01" /></label>
         <label class="field"><span>Статус</span><select v-model="epicForm.status"><option value="active">Активен</option><option value="paused">На паузе</option><option value="done">Завершён</option><option value="archived">Архив</option></select></label>
-        <label class="field"><span>Цвет маркера</span><input v-model="epicForm.marker" type="color" /></label>
+        <label class="field"><span>Цвет эпика</span><input v-model="epicForm.marker" type="color" /></label>
+        <label class="field"><span>Заливка эпика</span><select v-model="epicForm.fillStyle"><option value="solid">Сплошная</option><option value="striped">Полосатая (фоновая работа)</option></select></label>
         <label class="field"><span>Начало эпика</span><input v-model="epicForm.startDate" type="date" /></label>
         <label class="field"><span>Окончание эпика</span><input v-model="epicForm.endDate" type="date" /></label>
         <p class="field field--wide">По умолчанию период эпика — с сегодня до даты через три дня. Если этапы выходят за указанный период, полоса эпика расширяется до их границ. Очистите обе даты, чтобы период полностью подстраивался под этапы.</p>
@@ -376,7 +377,7 @@ import { addCalendarDays, addWorkingDays, compareDates, fromLocalDate, workingDa
 import { compareBaseline } from '../domain/baseline/diff'
 import { epicVisibleInRange } from '../domain/models/epic-period'
 import { calculateCapacity, CapacityCache, type CapacityCell, type CapacityContribution, type CapacityRow } from '../domain/capacity/engine'
-import type { EpicStatus, ISODate, QuarterId, StageKind, StageStatus, WorkingCalendar } from '../domain/models/types'
+import type { Epic, EpicStatus, ISODate, QuarterId, StageKind, StageStatus, WorkingCalendar } from '../domain/models/types'
 import { createQuarter, nextQuarterId, quarterIdForDate } from '../domain/quarters/quarters'
 import { previewWorkspaceImport, type ImportPreview } from '../infrastructure/files/workspace-transfer'
 import { downloadTimelinePng } from '../infrastructure/screenshots/timeline-png'
@@ -519,16 +520,16 @@ const activeBaselineDiff = computed(() => activeBaseline.value && planner.data
   : undefined)
 const baselineNewStageIds = computed(() => activeBaselineDiff.value?.variances.filter(item => item.state === 'new').map(item => item.stageId) ?? [])
 
-const epicForm = reactive({ id: '', title: '', code: '', status: 'active' as EpicStatus, marker: '#2563eb', startDate: '', endDate: '', descriptionMarkdown: '' })
+const epicForm = reactive({ id: '', title: '', code: '', status: 'active' as EpicStatus, marker: '#2563eb', fillStyle: 'solid' as NonNullable<Epic['fillStyle']>, startDate: '', endDate: '', descriptionMarkdown: '' })
 const stageForm = reactive({ id: '', epicId: '', title: '', kind: 'task' as StageKind, activityTypeId: '', status: 'planned' as StageStatus, startDate: todayIso, endDate: todayIso, locked: false, descriptionMarkdown: '', externalUrl: '' })
 const calendarForm = reactive({ workingWeekdays: [1, 2, 3, 4, 5] as number[], holidays: '', extraWorkingDays: '' })
 
 function openNewEpic() {
   const today = fromLocalDate(new Date())
-  Object.assign(epicForm, { id: '', title: '', code: '', status: 'active', marker: '#2563eb', startDate: today, endDate: addCalendarDays(today, 3), descriptionMarkdown: '' })
+  Object.assign(epicForm, { id: '', title: '', code: '', status: 'active', marker: '#2563eb', fillStyle: 'solid', startDate: today, endDate: addCalendarDays(today, 3), descriptionMarkdown: '' })
   modal.value = 'epic'
 }
-function openEditEpic(id: string) { const epic = planner.data?.epics.find(item => item.id === id); if (!epic) return; Object.assign(epicForm, { id, title: epic.title, code: epic.code ?? '', status: epic.status, marker: epic.marker ?? '#2563eb', startDate: epic.startDate ?? '', endDate: epic.endDate ?? '', descriptionMarkdown: epic.descriptionMarkdown }); modal.value = 'epic' }
+function openEditEpic(id: string) { const epic = planner.data?.epics.find(item => item.id === id); if (!epic) return; Object.assign(epicForm, { id, title: epic.title, code: epic.code ?? '', status: epic.status, marker: epic.marker ?? '#2563eb', fillStyle: epic.fillStyle ?? 'solid', startDate: epic.startDate ?? '', endDate: epic.endDate ?? '', descriptionMarkdown: epic.descriptionMarkdown }); modal.value = 'epic' }
 function openNewStage() {
   const today = fromLocalDate(new Date())
   const start = today < range.value.startDate ? range.value.startDate : today > range.value.endDate ? range.value.startDate : today
@@ -545,7 +546,7 @@ async function submitEpic() {
   await perform(async () => {
     if (Boolean(epicForm.startDate) !== Boolean(epicForm.endDate)) throw new Error('Укажите обе даты эпика или оставьте обе пустыми')
     if (epicForm.startDate && epicForm.endDate && compareDates(epicForm.startDate as ISODate, epicForm.endDate as ISODate) > 0) throw new Error('Дата начала эпика позже окончания')
-    const changes = { code: epicForm.code || undefined, status: epicForm.status, marker: epicForm.marker, descriptionMarkdown: epicForm.descriptionMarkdown, startDate: epicForm.startDate ? epicForm.startDate as ISODate : undefined, endDate: epicForm.endDate ? epicForm.endDate as ISODate : undefined }
+    const changes = { code: epicForm.code || undefined, status: epicForm.status, marker: epicForm.marker, fillStyle: epicForm.fillStyle, descriptionMarkdown: epicForm.descriptionMarkdown, startDate: epicForm.startDate ? epicForm.startDate as ISODate : undefined, endDate: epicForm.endDate ? epicForm.endDate as ISODate : undefined }
     const created = epicForm.id ? undefined : await planner.addEpic(epicForm.title, changes)
     if (epicForm.id) await planner.updateEpic(epicForm.id, { title: epicForm.title, ...changes })
     modal.value = undefined

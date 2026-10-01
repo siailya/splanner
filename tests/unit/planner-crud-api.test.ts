@@ -300,3 +300,18 @@ test('CRUD changes survive closing and reopening SQLite', async () => {
   expect(database.load(one.code)).toEqual(before)
   expect(database.load(one.code).workspace.revision).toBe(3)
 })
+
+test('epic fill style persists and rejects unsupported values', async () => {
+  const { request, one } = await setup()
+  const created = await request('POST', '/epics', { expectedRevision: 0, data: { title: 'Техдолг', fillStyle: 'striped' } })
+  expect(created.status).toBe(201)
+  const id = created.body.data.id
+  expect(database!.load(one.code).epics.find(epic => epic.id === id)?.fillStyle).toBe('striped')
+  expect((await request('GET', `/epics/${id}`)).body.data.fillStyle).toBe('striped')
+  const invalid = await request('PATCH', `/epics/${id}`, { expectedRevision: 1, data: { fillStyle: 'dots' } })
+  expect(invalid.status).toBe(422)
+  expect(database!.load(one.code).workspace.revision).toBe(1)
+  const updated = await request('PATCH', `/epics/${id}`, { expectedRevision: 1, data: { fillStyle: 'solid' } })
+  expect(updated.status).toBe(200)
+  expect((await request('GET', `/epics/${id}`)).body.data.fillStyle).toBe('solid')
+})

@@ -51,6 +51,7 @@ export interface Epic {
   startDate?: ISODate
   endDate?: ISODate
   marker?: string
+  fillStyle?: 'solid' | 'striped'
   sortOrder: number
   createdAt: string
   updatedAt: string

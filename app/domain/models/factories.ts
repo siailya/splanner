@@ -112,6 +112,7 @@ export function createEpic(workspaceId: string, title: string, sortOrder = 0): E
     descriptionMarkdown: '',
     status: 'active',
     marker: '#2563eb',
+    fillStyle: 'solid',
     sortOrder,
     createdAt: timestamp,
     updatedAt: timestamp,

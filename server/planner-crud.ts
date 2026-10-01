@@ -25,6 +25,7 @@ const epicFields = z.object({
   startDate: date.nullable().optional(),
   endDate: date.nullable().optional(),
   marker: z.string().nullable().optional(),
+  fillStyle: z.enum(['solid', 'striped']).optional(),
   sortOrder: sortOrder.optional(),
 }).strict()
 const stageFields = z.object({
