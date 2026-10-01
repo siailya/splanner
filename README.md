@@ -50,6 +50,46 @@ docker compose exec planner node .output/server/cli.mjs workspace:reset-pin --co
 
 Импорт через CLI требует, чтобы файл экспорта был доступен внутри контейнера; его можно поместить в примонтированный каталог `/data`. PIN хранится как salted scrypt hash. Смена PIN отзывает все действующие сессии редактирования.
 
+## Стек Portainer из GHCR
+
+Для Docker Standalone используйте `compose.portainer.yaml`. Он скачивает готовый образ из GHCR, публикует порт `3101`, проверяет `/health` и сохраняет SQLite (включая WAL/SHM), импорты и файлы backup в `/opt/splanner/data` на Docker-хосте. Каталог сохраняется при пересоздании или удалении стека. Контейнер работает как `node` (UID/GID `1000:1000`); подготовьте каталог на хосте выбранного Portainer environment:
+
+```bash
+sudo install -d -m 0750 -o 1000 -g 1000 /opt/splanner/data
+```
+
+В Portainer откройте **Stacks → Add stack**, укажите имя `splanner` и вставьте содержимое `compose.portainer.yaml` в **Web editor**. При загрузке из Git укажите этот файл в **Compose path**. В **Environment variables** задайте:
+
+| Переменная | Значение |
+|---|---|
+| `DOMAIN` | Домен Traefik, по умолчанию `splanner.samolyev.ru` |
+| `PUBLIC_ORIGIN` | По умолчанию `https://${DOMAIN}`; можно переопределить адресом без завершающего `/` |
+| `TRAEFIK_NETWORK` | Внешняя Docker-сеть Traefik, по умолчанию `proxy_network` |
+| `TRAEFIK_CERTRESOLVER` | Настроенный в Traefik ACME resolver, по умолчанию `letsencrypt` |
+| `IMAGE_TAG` | По умолчанию `latest`; для фиксированной версии — `v1.0.0` или `sha-<полный SHA>` |
+| `DATA_DIR` | Абсолютный каталог на Docker-хосте, по умолчанию `/opt/splanner/data`; создайте его с правами выше |
+| `HOST_PORT` | По умолчанию `3101` |
+| `BIND_ADDRESS` | По умолчанию `0.0.0.0`; `127.0.0.1`, если reverse proxy работает на этом же хосте вне Docker |
+| `TRUST_PROXY` | По умолчанию `1` для одного reverse proxy; `0` при прямом доступе |
+| `JSON_LIMIT` | По умолчанию `10mb` |
+| `SESSION_HOURS` | По умолчанию `8` |
+
+Стек подключается к существующей внешней сети `proxy_network`; Traefik должен быть подключён к той же сети и иметь entrypoint `websecure` и resolver `letsencrypt`. HTTPS-роутер отправляет запросы для `splanner.samolyev.ru` на порт контейнера `3101` и устанавливает `X-Forwarded-Proto=https`. Basic Auth и отдельный WebSocket-роутер не используются. DNS домена должен указывать на сервер Traefik.
+
+Если образ приватный, добавьте в Portainer registry `ghcr.io` с пользователем `siailya` и GitHub PAT с `read:packages`, затем выберите этот registry при развёртывании. Секрет в Compose не нужен. Нажмите **Deploy the stack** и создайте workspace через **Containers → planner → Console**:
+
+```bash
+node .output/server/cli.mjs workspace:create --name "Команда A"
+```
+
+Для backup используйте ту же Console:
+
+```bash
+node .output/server/cli.mjs backup:database --output /data/planner-backup.sqlite
+```
+
+Файл появится в `DATA_DIR` на Docker-хосте. Для обновления измените `IMAGE_TAG` при необходимости и обновите стек с повторным скачиванием образа. Не запускайте несколько экземпляров с одним каталогом SQLite. При переносе с `compose.yaml` сначала остановите прежний контейнер и перенесите данные из его named volume в новый каталог с владельцем `1000:1000`.
+
 ## Резервное копирование и перенос
 
 Снимки отдельных workspace доступны редактору в настройках: ручные и автоматические перед импортом, восстановлением, удалениями и изменением календаря. История ограничена 10 снимками и 20 МиБ на workspace. Для всей SQLite-базы используйте согласованный backup API `better-sqlite3`:
