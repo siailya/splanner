@@ -1,5 +1,9 @@
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
+# better-sqlite3 needs node-gyp when no matching prebuilt binary is available.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 RUN npm install -g bun@1.3.14
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
