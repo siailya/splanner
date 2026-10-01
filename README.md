@@ -25,6 +25,10 @@ DB_PATH=./data/planner.sqlite PUBLIC_ORIGIN=http://127.0.0.1:3000 bun run admin 
 
 ## Выпуск и Docker
 
+GitHub Actions workflow `.github/workflows/publish-container.yml` собирает Dockerfile и публикует образ `ghcr.io/siailya/splanner` при push в `main`, push тега `v*` или ручном запуске. Ветка `main` обновляет `latest`, теги публикуются с исходным именем (например, `v1.0.0`), каждый запуск также создаёт тег `sha-<полный SHA коммита>`. Сборка выполняется для `linux/amd64` с кешем GitHub Actions.
+
+Workflow должен запускаться из GitHub-репозитория владельца `siailya`. Для авторизации используется встроенный `GITHUB_TOKEN` с правом `packages: write`; отдельный секрет не нужен. Если пакет уже существует, предоставьте этому репозиторию доступ к нему в настройках пакета **Manage Actions access**.
+
 ```bash
 bun run typecheck
 bun run lint

@@ -25,6 +25,8 @@ const props = defineProps<{
   rangeStart: ISODate
   rangeEnd: ISODate
   scale: TimelineScale
+  columnWidth?: number
+  periods?: Array<{ startDate: ISODate; endDate: ISODate }>
   gridWidth: number
   collapsedEpicIds: string[]
   mode: 'cascade' | 'free'
@@ -54,6 +56,7 @@ const emit = defineEmits<{
   stageContextMenu: [payload: { id: string; x: number; y: number }]
   epicContextMenu: [payload: { id: string; x: number; y: number }]
   viewportChange: [payload: { x: number; y: number }]
+  geometryChange: [payload: { gridWidth: number; offset: number; widths: number[] }]
 }>()
 
 const container = ref<HTMLElement>()
@@ -66,6 +69,7 @@ let milestoneDrag: { id: string; date: ISODate } | undefined
 let epicDragStartDate: ISODate | undefined
 let worktimeOverrideDates: ISODate[] = []
 let renderedViewKey: string | undefined
+let renderedRangeKey: string | undefined
 let viewportRestoreFrame: number | undefined
 let initialViewportFrame: number | undefined
 
@@ -74,7 +78,21 @@ function escapeHtml(value: unknown): string {
 }
 
 function viewKey(): string {
-  return [props.rangeStart, props.rangeEnd, props.scale, props.gridWidth].join('|')
+  return [rangeKey(), props.scale, timelineCellWidth()].join('|')
+}
+
+function rangeKey(): string { return [props.rangeStart, props.rangeEnd, props.gridWidth].join('|') }
+function timelineCellWidth(): number { return props.columnWidth ?? { day: 34, week: 64, month: 92 }[props.scale] }
+
+function emitGeometry() {
+  if (!instance || !container.value) return
+  const timeline = container.value.querySelector<HTMLElement>('.gantt_task')
+  const periods = props.periods ?? []
+  emit('geometryChange', {
+    gridWidth: timeline ? timeline.getBoundingClientRect().left - container.value.getBoundingClientRect().left : props.gridWidth,
+    offset: periods.length ? Math.max(0, instance.posFromDate(toLocalDate(periods[0]!.startDate))) : 0,
+    widths: periods.map(period => instance!.posFromDate(toLocalDate(addCalendarDays(period.endDate, 1))) - instance!.posFromDate(toLocalDate(period.startDate))),
+  })
 }
 
 function timelineDate(date: ISODate, kind: Stage['kind']): Date {
@@ -152,7 +170,7 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   gantt.config.row_height = 42
   gantt.config.bar_height = 24
   gantt.config.scale_height = props.scale === 'day' ? 72 : 56
-  gantt.config.min_column_width = props.scale === 'day' ? 34 : props.scale === 'week' ? 64 : 92
+  gantt.config.min_column_width = timelineCellWidth()
   gantt.config.start_date = toLocalDate(props.rangeStart)
   gantt.config.end_date = toLocalDate(addCalendarDays(props.rangeEnd, 1))
   gantt.config.fit_tasks = false
@@ -170,12 +188,15 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   gantt.config.scales = props.scale === 'day'
     ? [
         { unit: 'month', step: 1, format: '%F %Y' },
-        { unit: 'day', step: 1, format: '%d' },
-        { unit: 'day', step: 1, format: '%D' },
+        { unit: 'day', step: 1, format: date => {
+          const label = gantt.date.date_to_str('%d')(date)
+          return timelineCellWidth() < 16 ? (date.getDay() === 1 ? `<span class="gantt-day-label">${label}</span>` : '') : label
+        } },
+        { unit: 'day', step: 1, format: date => timelineCellWidth() < 24 ? '' : gantt.date.date_to_str('%D')(date) },
       ]
     : props.scale === 'week'
-      ? [{ unit: 'month', step: 1, format: '%F %Y' }, { unit: 'week', step: 1, format: date => `Нед. ${gantt.date.date_to_str('%W')(date)}` }]
-      : [{ unit: 'year', step: 1, format: '%Y' }, { unit: 'month', step: 1, format: '%F' }]
+      ? [{ unit: 'month', step: 1, format: '%F %Y' }, { unit: 'week', step: 1, format: date => `${timelineCellWidth() < 45 ? '' : 'Нед. '}${gantt.date.date_to_str('%W')(date)}` }]
+      : [{ unit: 'year', step: 1, format: '%Y' }, { unit: 'month', step: 1, format: timelineCellWidth() < 65 ? '%M' : '%F' }]
 
   for (const date of worktimeOverrideDates) gantt.unsetWorkTime({ date: toLocalDate(date) })
   for (let day = 0; day <= 6; day += 1) {
@@ -342,6 +363,7 @@ function attachEvents(gantt: import('dhtmlx-gantt').GanttStatic) {
     gantt.attachEvent('onGanttScroll', (x, y) => {
       emit('viewportChange', { x, y })
     }),
+    gantt.attachEvent('onGanttRender', emitGeometry),
   ]
 }
 
@@ -386,19 +408,24 @@ function renderStageGhosts(stageIds: Set<string>, shiftDate: (date: ISODate) => 
 function render() {
   if (!instance) return
   const nextViewKey = viewKey()
-  // clearAll() resets DHTMLX's internal scroll state. Keep the viewport for
-  // data-only updates (drag, resize, cascade, undo/redo), but reset it when
-  // the visible date range, scale or grid geometry intentionally changes.
-  const viewport = renderedViewKey === nextViewKey ? instance.getScrollState() : undefined
+  // Keep the center date when the time columns change width; ordinary data
+  // updates retain their pixel position. A new date range resets the viewport.
+  const viewport = renderedRangeKey === rangeKey() ? instance.getScrollState() : undefined
+  const timeline = container.value?.querySelector<HTMLElement>('.gantt_task')
+  const anchor = viewport && renderedViewKey !== nextViewKey && timeline
+    ? instance.dateFromPos(viewport.x + timeline.clientWidth / 2) : undefined
   configure(instance)
   instance.clearAll()
   instance.parse(taskData())
   instance.render()
   syncVisualState()
   scheduleBaselineOverlays()
+  emitGeometry()
   renderedViewKey = nextViewKey
+  renderedRangeKey = rangeKey()
 
   if (viewport) {
+    if (anchor && timeline) viewport.x = Math.max(0, instance.posFromDate(anchor) - timeline.clientWidth / 2)
     instance.scrollTo(viewport.x, viewport.y)
     if (viewportRestoreFrame !== undefined) cancelAnimationFrame(viewportRestoreFrame)
     viewportRestoreFrame = requestAnimationFrame(() => {
@@ -542,14 +569,17 @@ onMounted(async () => {
   instance.parse(taskData())
   scrollToInitialDate()
   scheduleBaselineOverlays()
+  emitGeometry()
   renderedViewKey = viewKey()
+  renderedRangeKey = rangeKey()
   container.value?.addEventListener('pointerdown', onPointerDown)
   container.value?.addEventListener('pointerup', onPointerUp)
   container.value?.addEventListener('dblclick', onDoubleClick)
   container.value?.addEventListener('contextmenu', onContextMenu)
 })
 
-watch(() => [props.readOnly, props.epics, props.stages, props.allStages, props.dependencies, props.calendar, props.rangeStart, props.rangeEnd, props.scale, props.gridWidth, props.collapsedEpicIds, props.conflictStageIds, props.workItems, props.baselineSnapshots, props.baselineNewStageIds], render, { deep: true })
+watch(() => [props.readOnly, props.epics, props.stages, props.allStages, props.dependencies, props.calendar, props.rangeStart, props.rangeEnd, props.scale, props.columnWidth, props.gridWidth, props.collapsedEpicIds, props.conflictStageIds, props.workItems, props.baselineSnapshots, props.baselineNewStageIds], render, { deep: true })
+watch(() => props.periods, emitGeometry, { deep: true })
 watch(() => [props.selectedStageIds, props.highlightedStageIds], syncVisualState, { deep: true })
 
 onBeforeUnmount(() => {

@@ -18,6 +18,12 @@
         </button>
       </div>
 
+      <div class="timeline-zoom" role="group" aria-label="Горизонтальный масштаб таймлайна">
+        <button type="button" aria-label="Уменьшить масштаб таймлайна" title="Уменьшить ширину временных ячеек" :disabled="!ui.canZoomOut" @click="ui.zoomTimeline(-1)"><UIcon name="i-lucide-minus" /></button>
+        <button type="button" class="timeline-zoom__reset" aria-label="Сбросить масштаб таймлайна" title="Вернуть масштаб 100%" @click="ui.timelineZoom = 1">{{ Math.round(ui.timelineZoom * 100) }}%</button>
+        <button type="button" aria-label="Увеличить масштаб таймлайна" title="Увеличить ширину временных ячеек" :disabled="!ui.canZoomIn" @click="ui.zoomTimeline(1)"><UIcon name="i-lucide-plus" /></button>
+      </div>
+
       <UTooltip text="Показать сегодня (T)">
         <UButton color="neutral" variant="ghost" icon="i-lucide-calendar-days" label="Сегодня" size="sm" @click="ganttRef?.scrollToToday()" />
       </UTooltip>
@@ -106,6 +112,8 @@
         :range-start="range.startDate"
         :range-end="range.endDate"
         :scale="ui.scale"
+        :column-width="ui.timelineColumnWidth"
+        :periods="capacityResult.periods"
         :grid-width="ui.gridWidth"
         :collapsed-epic-ids="ui.collapsedEpicIds"
         :mode="ui.moveMode"
@@ -132,6 +140,7 @@
         @epic-select="handleEpicSelect"
         @selection-clear="clearStageSelection"
         @viewport-change="payload => timelineScrollX = payload.x"
+        @geometry-change="payload => timelineGeometry = payload"
       />
       </div>
       <CapacityPanel
@@ -140,6 +149,7 @@
         :roles="planner.data.roles"
         :grid-width="ui.gridWidth"
         :scroll-x="timelineScrollX"
+        :geometry="timelineGeometry"
         @scroll="x => ganttRef?.scrollToX(x)"
         @highlight="ids => capacityHighlightStageIds = ids"
         @drilldown="openCapacityDrilldown"
@@ -402,6 +412,7 @@ const bulkDelta = ref(1)
 const bulkStatus = ref('')
 const bulkActivity = ref('')
 const timelineScrollX = ref(0)
+const timelineGeometry = ref<{ gridWidth: number; offset: number; widths: number[] }>()
 const capacityHighlightStageIds = ref<string[]>([])
 const capacitySelection = ref<{ row: CapacityRow; cell: CapacityCell }>()
 const capacityCache = markRaw(new CapacityCache())

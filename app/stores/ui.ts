@@ -1,6 +1,7 @@
 import type { MoveMode, QuarterId, StageKind, StageStatus, TimelineScale } from '../domain/models/types'
 
 export type QuarterViewMode = 'current' | 'next' | 'combined' | 'archive'
+const timelineZoomLevels = [0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 
 export interface TimelineFilters {
   query: string
@@ -24,6 +25,15 @@ export const useUiStore = defineStore('ui', () => {
   const quarterView = ref<QuarterViewMode>('combined')
   const selectedQuarterId = ref<QuarterId>()
   const scale = ref<TimelineScale>('day')
+  const timelineZoom = ref(1)
+  const timelineColumnWidth = computed(() => Math.round(({ day: 34, week: 64, month: 92 }[scale.value]) * timelineZoom.value))
+  const canZoomIn = computed(() => timelineZoom.value < timelineZoomLevels.at(-1)!)
+  const canZoomOut = computed(() => timelineZoom.value > timelineZoomLevels[0]!)
+
+  function zoomTimeline(direction: -1 | 1): void {
+    const index = timelineZoomLevels.indexOf(timelineZoom.value)
+    timelineZoom.value = timelineZoomLevels[Math.max(0, Math.min(timelineZoomLevels.length - 1, index + direction))]!
+  }
   const moveMode = ref<MoveMode>('cascade')
   const gridWidth = ref(360)
   const collapsedEpicIds = ref<string[]>([])
@@ -45,6 +55,7 @@ export const useUiStore = defineStore('ui', () => {
         quarterView: QuarterViewMode
         selectedQuarterId: QuarterId
         scale: TimelineScale
+        timelineZoom: number
         moveMode: MoveMode
         gridWidth: number
         collapsedEpicIds: string[]
@@ -57,6 +68,7 @@ export const useUiStore = defineStore('ui', () => {
       if (value.quarterView) quarterView.value = value.quarterView
       if (value.selectedQuarterId) selectedQuarterId.value = value.selectedQuarterId
       if (value.scale) scale.value = value.scale
+      if (value.timelineZoom !== undefined && timelineZoomLevels.includes(value.timelineZoom)) timelineZoom.value = value.timelineZoom
       if (value.moveMode) moveMode.value = value.moveMode
       if (value.gridWidth) gridWidth.value = value.gridWidth
       if (value.collapsedEpicIds) collapsedEpicIds.value = value.collapsedEpicIds
@@ -76,6 +88,7 @@ export const useUiStore = defineStore('ui', () => {
       quarterView: quarterView.value,
       selectedQuarterId: selectedQuarterId.value,
       scale: scale.value,
+      timelineZoom: timelineZoom.value,
       moveMode: moveMode.value,
       gridWidth: gridWidth.value,
       collapsedEpicIds: collapsedEpicIds.value,
@@ -90,10 +103,10 @@ export const useUiStore = defineStore('ui', () => {
   if (import.meta.client) {
     hydrate()
     watch(() => route.params.code, () => {
-      quarterView.value = 'combined'; selectedQuarterId.value = undefined; scale.value = 'day'; moveMode.value = 'cascade'
+      quarterView.value = 'combined'; selectedQuarterId.value = undefined; scale.value = 'day'; timelineZoom.value = 1; moveMode.value = 'cascade'
       gridWidth.value = 360; collapsedEpicIds.value = []; clearFilters(); hydrate()
     })
-    watch([quarterView, selectedQuarterId, scale, moveMode, gridWidth, collapsedEpicIds, capacityOpen, capacityHeight, capacityScope, expandedCapacityRoleIds, () => ({ ...filters })], persist, { deep: true })
+    watch([quarterView, selectedQuarterId, scale, timelineZoom, moveMode, gridWidth, collapsedEpicIds, capacityOpen, capacityHeight, capacityScope, expandedCapacityRoleIds, () => ({ ...filters })], persist, { deep: true })
   }
 
   function toggleEpic(id: string): void {
@@ -108,6 +121,7 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     quarterView, selectedQuarterId, scale, moveMode, gridWidth, collapsedEpicIds, filters,
+    timelineZoom, timelineColumnWidth, canZoomIn, canZoomOut, zoomTimeline,
     capacityOpen, capacityHeight, capacityScope, expandedCapacityRoleIds,
     hydrate, persist, toggleEpic, clearFilters,
   }

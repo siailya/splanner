@@ -18,15 +18,17 @@
       <div class="capacity-table" :style="tableStyle">
         <div class="capacity-row capacity-row--periods" :style="tableStyle">
           <div class="capacity-label capacity-label--header">Роль / сотрудник</div>
-          <div v-for="period in result.periods" :key="period.key" class="capacity-period" :title="`${period.startDate} — ${period.endDate}`">{{ period.label }}</div>
+          <div v-if="props.geometry?.offset" class="capacity-period" aria-hidden="true" />
+          <div v-for="(period, index) in result.periods" :key="period.key" class="capacity-period" :class="{ 'capacity-period--compact': result.mode === 'day' && periodWidths[index]! < 16 }" :title="`${period.startDate} — ${period.endDate}`"><span>{{ periodLabel(period, index) }}</span></div>
         </div>
         <div v-for="row in visibleRows" :key="row.id" class="capacity-row" :class="`capacity-row--${row.kind}`" :style="tableStyle">
           <button class="capacity-label" type="button" @click="toggleRole(row)">
             <UIcon v-if="row.kind === 'role'" :name="ui.expandedCapacityRoleIds.includes(row.roleId!) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />
             <span>{{ row.name }}</span>
           </button>
+          <div v-if="props.geometry?.offset" class="capacity-period" aria-hidden="true" />
           <button
-            v-for="cell in row.cells" :key="cell.key" type="button" class="capacity-cell" :class="`capacity-cell--${cell.state}`"
+            v-for="(cell, index) in row.cells" :key="cell.key" type="button" class="capacity-cell" :class="[`capacity-cell--${cell.state}`, { 'capacity-cell--compact': periodWidths[index]! < 24 }]"
             :title="tooltip(cell)" @click="$emit('drilldown', { row, cell })" @mouseenter="$emit('highlight', cell.contributions.map(item => item.stageId))" @mouseleave="$emit('highlight', [])"
           >
             <template v-if="result.mode === 'day'">
@@ -49,9 +51,10 @@
 const workspacePath = useWorkspacePath()
 import type { CapacityCell, CapacityResult, CapacityRow } from '../../domain/capacity/engine'
 import type { Role } from '../../domain/models/types'
+import { weekday } from '../../domain/calendar/date'
 import { useUiStore } from '../../stores/ui'
 
-const props = defineProps<{ result: CapacityResult; roles: Role[]; gridWidth: number; scrollX: number }>()
+const props = defineProps<{ result: CapacityResult; roles: Role[]; gridWidth: number; scrollX: number; geometry?: { gridWidth: number; offset: number; widths: number[] } }>()
 const emit = defineEmits<{
   scroll: [x: number]
   drilldown: [payload: { row: CapacityRow; cell: CapacityCell }]
@@ -64,8 +67,20 @@ const personFilter = ref('')
 const overloadOnly = ref(false)
 const freeOnly = ref(false)
 const syncing = ref(false)
-const cellWidth = computed(() => props.result.mode === 'day' ? 34 : 76)
-const tableStyle = computed(() => ({ gridTemplateColumns: `${props.gridWidth}px repeat(${props.result.periods.length}, ${cellWidth.value}px)`, minWidth: `${props.gridWidth + props.result.periods.length * cellWidth.value}px` }))
+const periodWidths = computed(() => props.geometry?.widths.length === props.result.periods.length
+  ? props.geometry.widths : props.result.periods.map(() => props.result.mode === 'day' ? ui.timelineColumnWidth : 76))
+const tableStyle = computed(() => {
+  const gridWidth = props.geometry?.gridWidth ?? props.gridWidth
+  const offset = props.geometry?.offset ?? 0
+  const widths = periodWidths.value
+  return {
+    gridTemplateColumns: `${gridWidth}px ${offset ? `${offset}px ` : ''}${widths.map(width => `${width}px`).join(' ')}`,
+    minWidth: `${gridWidth + offset + widths.reduce((sum, width) => sum + width, 0)}px`,
+  }
+})
+function periodLabel(period: CapacityResult['periods'][number], index: number): string {
+  return props.result.mode === 'day' && periodWidths.value[index]! < 16 && weekday(period.startDate) !== 1 ? '' : period.label
+}
 const visibleRows = computed(() => {
   const expanded = new Set(ui.expandedCapacityRoleIds)
   return props.result.rows.filter((row) => {
@@ -84,10 +99,12 @@ const visibleRows = computed(() => {
     return props.roles.findIndex(role => role.id === a.roleId) - props.roles.findIndex(role => role.id === b.roleId)
   })
 })
-watch(() => props.scrollX, (value) => {
+watch(() => [props.scrollX, props.geometry, ui.capacityOpen], async () => {
+  await nextTick()
+  const value = props.scrollX
   if (!scrollElement.value || Math.abs(scrollElement.value.scrollLeft - value) < 1) return
   syncing.value = true; scrollElement.value.scrollLeft = value; requestAnimationFrame(() => { syncing.value = false })
-})
+}, { deep: true })
 function onScroll() { if (!syncing.value && scrollElement.value) emit('scroll', scrollElement.value.scrollLeft) }
 function toggleRole(row: CapacityRow) { if (row.kind !== 'role' || !row.roleId) return; ui.expandedCapacityRoleIds = ui.expandedCapacityRoleIds.includes(row.roleId) ? ui.expandedCapacityRoleIds.filter(id => id !== row.roleId) : [...ui.expandedCapacityRoleIds, row.roleId] }
 function percent(cell: CapacityCell) { return cell.utilization === null ? (cell.usedFte > 0 ? 'нет capacity' : '—') : `${Math.round(cell.utilization * 100)}%` }
