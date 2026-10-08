@@ -4,6 +4,7 @@ import type { Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { serializeWorkspace } from '../../app/infrastructure/files/workspace-transfer'
 import { createApp } from '../../server/app'
 import { openDatabase } from '../../server/database'
 import { addCalendarDays, fromLocalDate } from '../../app/domain/calendar/date'
@@ -103,7 +104,7 @@ test('invalid CRUD inputs do not write data, revisions or backups', async () => 
   const before = database!.load(one.code)
   const backups = database!.listBackups(one.code)
   const invalidEpics = [
-    { title: '   ' }, { status: 'blocked' }, { startDate: '2026-02-30' },
+    { title: '   ' }, { status: 'unknown' }, { startDate: '2026-02-30' },
     { startDate: '2026-11-12', endDate: '2026-11-10' }, { startDate: null },
     { id: 'replacement' }, { workspaceId: 'foreign' }, { createdAt: nowISO() },
     { effectivePeriod: null }, { sortOrder: -1 }, {},
@@ -314,4 +315,29 @@ test('epic fill style persists and rejects unsupported values', async () => {
   const updated = await request('PATCH', `/epics/${id}`, { expectedRevision: 1, data: { fillStyle: 'solid' } })
   expect(updated.status).toBe(200)
   expect((await request('GET', `/epics/${id}`)).body.data.fillStyle).toBe('solid')
+})
+
+test('blocked epics round-trip through CRUD, workspace PUT and JSON import', async () => {
+  const { request, one } = await setup(true)
+  const created = await request('POST', '/epics', { expectedRevision: 0, data: { title: 'Blocked', status: 'blocked', marker: '#14b8a6', fillStyle: 'striped' } })
+  expect(created.status).toBe(201)
+  const id = created.body.data.id
+  expect((await request('GET', `/epics/${id}`)).body.data).toMatchObject({ status: 'blocked', marker: '#14b8a6', fillStyle: 'striped' })
+  expect((await request('GET', '/epics')).body.data).toEqual([created.body.data])
+  expect((await request('PATCH', `/epics/${id}`, { expectedRevision: 1, data: { status: 'active' } })).status).toBe(200)
+  expect((await request('PATCH', `/epics/${id}`, { expectedRevision: 2, data: { status: 'blocked' } })).body.data.status).toBe('blocked')
+  const workspace = (await request('GET', '')).body.data
+  expect((await request('PUT', '', { expectedRevision: 3, data: workspace })).status).toBe(200)
+  const imported = await request('POST', '/import', { expectedRevision: 4, json: serializeWorkspace(workspace) })
+  expect(imported.status).toBe(200)
+  expect((await request('GET', '')).body.data.epics[0].status).toBe('blocked')
+  const before = database!.load(one.code)
+  const invalid = { ...before, epics: before.epics.map(epic => ({ ...epic, status: 'unknown' })) }
+  expect((await request('PUT', '', { expectedRevision: 5, data: invalid })).status).toBe(422)
+  expect((await request('POST', '/import', { expectedRevision: 5, json: serializeWorkspace(invalid as typeof before) })).status).toBe(422)
+  expect((await request('POST', '/epics', { expectedRevision: 5, data: { title: 'Invalid', status: 'unknown' } })).status).toBe(422)
+  expect(database!.load(one.code)).toEqual(before)
+  database!.db.close()
+  database = openDatabase(join(directory!, 'planner.sqlite'))
+  expect(database.load(one.code).epics[0]?.status).toBe('blocked')
 })

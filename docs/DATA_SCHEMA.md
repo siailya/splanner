@@ -24,3 +24,5 @@ Dexie database: `delivery-planner`.
 `Stage` хранится один раз даже при пересечении кварталов. `quarterIds` — вычисляемый индекс. `BaselineStageSnapshot` не удаляется вслед за текущим stage: это позволяет показать `Removed since baseline`.
 
 Экспорт v3 имеет `format`, `application`, `schemaVersion`, `appVersion`, `exportedAt`, `workspace`. Backup payload хранит сериализованный `PlannerData`; при скачивании преобразуется в обычный импортируемый workspace export.
+
+`Epic.status`: `active` (по умолчанию), `paused`, `done`, `archived`, `blocked`. Статус `blocked` сохраняется в workspace, backup и JSON-экспорте и принимается импортом и HTTP API. Формат остаётся v3; миграция данных не требуется. Прежние статусы сохраняют своё значение. `blocked` не меняет даты, зависимости или блокировку этапов (`Stage.locked`).

@@ -4,7 +4,7 @@ export type QuarterId = `${number}-Q${1 | 2 | 3 | 4}`
 
 export type StageKind = 'task' | 'scope' | 'milestone'
 export type StageStatus = 'planned' | 'in_progress' | 'done' | 'blocked'
-export type EpicStatus = 'active' | 'paused' | 'done' | 'archived'
+export type EpicStatus = 'active' | 'paused' | 'done' | 'archived' | 'blocked'
 export type MoveMode = 'cascade' | 'free'
 export type TimelineScale = 'day' | 'week' | 'month'
 export type AssignmentTargetType = 'person' | 'role'

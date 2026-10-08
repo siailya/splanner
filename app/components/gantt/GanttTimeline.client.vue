@@ -117,6 +117,7 @@ function taskData() {
       open: !props.collapsedEpicIds.includes(epic.id),
       readonly: props.readOnly,
       epicId: epic.id,
+      status: epic.status,
       marker: epic.marker,
       fillStyle: epic.fillStyle,
       color: epic.marker ?? '#2563eb',
@@ -219,7 +220,9 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
   }
   gantt.templates.scale_cell_class = date => !isWorkingDay(fromLocalDate(date), props.calendar) ? 'non-working-scale' : ''
   gantt.templates.task_class = (_start, _end, task: Record<string, unknown>) => {
-    if (String(task.id).startsWith('epic:')) return task.fillStyle === 'striped' ? 'epic-bar epic-striped' : 'epic-bar'
+    if (String(task.id).startsWith('epic:')) {
+      return ['epic-bar', task.fillStyle === 'striped' ? 'epic-striped' : '', task.status === 'blocked' ? 'status-blocked' : ''].filter(Boolean).join(' ')
+    }
     const classes = [`stage-${task.kind ?? 'task'}`, `status-${String(task.status ?? 'planned').replace('_', '-')}`]
     const activitySlug = props.activityTypes?.find(type => type.id === task.activityTypeId)?.slug
     if (activitySlug) classes.push(`activity-${activitySlug}`)
@@ -239,7 +242,7 @@ function configure(gantt: import('dhtmlx-gantt').GanttStatic) {
       const period = epicPeriod(epic, props.allStages)
       const dates = period ? `<span>${period.startDate} — ${period.endDate} · ${workingDaysBetween(period.startDate, period.endDate, props.calendar)} раб. дн.</span>` : ''
       const description = epic.descriptionMarkdown.trim() ? `<div class="planner-tooltip__description">${escapeHtml(epic.descriptionMarkdown)}</div>` : ''
-      return `<div class="planner-tooltip"><strong>${escapeHtml(epic.title)}</strong>${dates}${description}</div>`
+      return `<div class="planner-tooltip"><strong>${escapeHtml(epic.title)}</strong>${dates}${epic.status === 'blocked' ? '<div>Заблокирован</div>' : ''}${description}</div>`
     }
     const stage = props.stages.find(item => item.id === task.id)
     if (!stage) return ''

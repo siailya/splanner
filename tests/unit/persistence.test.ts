@@ -37,6 +37,21 @@ describe('Dexie persistence and transfer', () => {
     expect(parsed.workspace).toEqual(data)
   })
 
+  it.each(['active', 'paused', 'done', 'archived', 'blocked'] as const)('round-trips epic status %s without changing schema version', async (status) => {
+    const data = createDefaultWorkspace(new Date(2026, 6, 22))
+    const epic = { ...createEpic(data.workspace.id, 'Status'), status }
+    data.epics.push(epic)
+    const repo = repository()
+    await repo.replaceAll(data)
+    expect((await repo.loadAll(data.workspace.id)).epics).toEqual([epic])
+    const parsed = parseWorkspaceExport(serializeWorkspace(data))
+    expect(parsed.schemaVersion).toBe(3)
+    expect(parsed.workspace.epics).toEqual([epic])
+    const invalid = JSON.parse(serializeWorkspace(data))
+    invalid.workspace.epics[0].status = 'unknown'
+    expect(() => parseWorkspaceExport(JSON.stringify(invalid))).toThrow('epics.0.status')
+  })
+
   it('includes an epic with explicit dates in a quarter export without stages', () => {
     const data = createDefaultWorkspace(new Date(2026, 6, 22))
     const epic = createEpic(data.workspace.id, 'Ручной срок')

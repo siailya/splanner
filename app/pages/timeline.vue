@@ -216,7 +216,7 @@
       <form id="epic-form" class="form-grid" @submit.prevent="submitEpic"><fieldset class="read-only-fieldset" :disabled="planner.readOnly">
         <label class="field field--wide"><span>Название *</span><input v-model="epicForm.title" required autofocus placeholder="Например, CPM–CPA аукцион" /></label>
         <label class="field"><span>Короткий код</span><input v-model="epicForm.code" placeholder="ADS-01" /></label>
-        <label class="field"><span>Статус</span><select v-model="epicForm.status"><option value="active">Активен</option><option value="paused">На паузе</option><option value="done">Завершён</option><option value="archived">Архив</option></select></label>
+        <label class="field"><span>Статус</span><select v-model="epicForm.status"><option value="active">Активен</option><option value="paused">На паузе</option><option value="blocked">Заблокирован</option><option value="done">Завершён</option><option value="archived">Архив</option></select></label>
         <label class="field"><span>Цвет эпика</span><input v-model="epicForm.marker" type="color" /></label>
         <label class="field"><span>Заливка эпика</span><select v-model="epicForm.fillStyle"><option value="solid">Сплошная</option><option value="striped">Полосатая (фоновая работа)</option></select></label>
         <label class="field"><span>Начало эпика</span><input v-model="epicForm.startDate" type="date" /></label>

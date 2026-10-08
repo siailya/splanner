@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 
-const codes = JSON.parse(readFileSync('output/playwright/workspaces.json', 'utf8')) as { one: { code: string }, two: { code: string }, three: { code: string }, workflow: { code: string } }
+const codes = JSON.parse(readFileSync('output/playwright/workspaces.json', 'utf8')) as { one: { code: string }, two: { code: string }, three: { code: string }, workflow: { code: string }, blocked: { code: string } }
 const view = (code = codes.one.code) => `/w/${code}/view/timeline`
 const edit = (code = codes.one.code) => `/w/${code}/edit/timeline`
 
@@ -108,4 +108,67 @@ test('editor keeps baseline, table, print, backup and JSON import', async ({ pag
   await page.getByRole('button', { name: 'Заменить workspace' }).click()
   await page.goto(edit(code))
   await expect(page.getByRole('row', { name: /CPM–CPA аукцион/ })).toBeVisible()
+})
+
+test('blocked epic selectors and red borders preserve solid and striped marker fills in both themes', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Epic status and styles are covered in Chromium')
+  const code = codes.blocked.code
+  await page.goto(edit(code))
+  await page.getByLabel('PIN').fill('5678')
+  await page.getByRole('button', { name: 'Открыть редактирование' }).click()
+  await expect(page.getByRole('button', { name: 'Завершить редактирование' })).toBeVisible()
+  const current = (await (await page.request.get(`/api/workspaces/${code}`)).json()).data
+  const ids: string[] = []
+  for (const [index, fillStyle] of ['solid', 'striped'].entries()) {
+    const response = await page.request.post(`/api/workspaces/${code}/epics`, {
+      data: { expectedRevision: current.workspace.revision + index, data: { title: `Blocked ${fillStyle}`, status: 'blocked', marker: '#14b8a6', fillStyle } },
+    })
+    expect(response.status()).toBe(201)
+    ids.push((await response.json()).data.id)
+  }
+  await page.reload()
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((value) => {
+      document.documentElement.classList.toggle('dark', value === 'dark')
+      document.documentElement.classList.toggle('light', value === 'light')
+    }, theme)
+    for (const [index, fillStyle] of ['solid', 'striped'].entries()) {
+      const bar = page.locator(`.gantt_task_line[task_id="epic:${ids[index]}"]`)
+      await expect(bar).toHaveClass(/epic-bar.*status-blocked/)
+      await expect(bar).toHaveCSS('outline-color', 'rgb(239, 68, 68)')
+      await expect(bar).toHaveCSS('outline-width', '2px')
+      await expect(bar).toHaveCSS('border-top-color', 'rgb(239, 68, 68)')
+      await expect(bar).toHaveCSS('border-top-style', 'solid')
+      await expect(bar).toHaveCSS('border-top-width', '2px')
+      await expect(bar).toHaveCSS('background-color', 'rgb(20, 184, 166)')
+      if (fillStyle === 'striped') {
+        await expect(bar).toHaveClass(/epic-striped/)
+        await expect(bar).toHaveCSS('background-image', /repeating-linear-gradient/)
+      }
+    }
+  }
+  const bar = page.locator(`.gantt_task_line[task_id="epic:${ids[0]}"]`)
+  await bar.dblclick()
+  const modal = page.getByRole('dialog')
+  await expect(modal.getByRole('combobox', { name: 'Статус', exact: true })).toHaveValue('blocked')
+  await modal.getByRole('combobox', { name: 'Статус', exact: true }).selectOption('active')
+  await modal.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(bar).not.toHaveClass(/status-blocked/)
+  await expect(bar).toHaveCSS('outline-style', 'none')
+  await bar.dblclick()
+  await modal.getByRole('combobox', { name: 'Статус', exact: true }).selectOption('blocked')
+  await modal.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(bar).toHaveClass(/status-blocked/)
+  await page.reload()
+  await expect(bar).toHaveClass(/status-blocked/)
+  await page.goto(`/w/${code}/edit/projects/${ids[0]}`)
+  await page.getByLabel('Статус эпика').selectOption('blocked')
+  await expect(page.locator('.epic-hero')).toHaveCSS('border-top-color', 'rgb(239, 68, 68)')
+  await page.reload()
+  await expect(page.getByLabel('Статус эпика')).toHaveValue('blocked')
+  await page.goto(`/w/${code}/view/projects`)
+  const card = page.locator('.project-card').filter({ hasText: 'Blocked solid' })
+  await expect(card).toHaveClass(/status-blocked/)
+  await expect(card).toHaveCSS('border-top-color', 'rgb(239, 68, 68)')
+  await expect(card.locator('.status-blocked')).toHaveText('blocked')
 })

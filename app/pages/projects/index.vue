@@ -3,7 +3,7 @@
     <div class="content-toolbar"><div><strong>{{ epics.length }} проектов</strong><span>Эпик и проект — один объект планирования</span></div><NuxtLink v-if="!planner.readOnly" :to="workspacePath('/timeline')"><UButton icon="i-lucide-plus" label="Создать на Timeline" /></NuxtLink></div>
     <div v-if="!epics.length" class="page-empty"><UIcon name="i-lucide-folder-kanban" /><h3>Проектов пока нет</h3><p>Создайте первый эпик на Timeline.</p><NuxtLink :to="workspacePath('/timeline')">Открыть Timeline</NuxtLink></div>
     <div v-else class="project-grid">
-      <NuxtLink v-for="epic in epics" :key="epic.id" :to="workspacePath(`/projects/${epic.id}`)" class="project-card">
+      <NuxtLink v-for="epic in epics" :key="epic.id" :to="workspacePath(`/projects/${epic.id}`)" class="project-card" :class="{ 'status-blocked': epic.status === 'blocked' }">
         <span class="project-card__marker" :style="{ background: epic.marker ?? '#2563eb' }" />
         <div class="project-card__head"><span>{{ epic.code || 'PROJECT' }}</span><b :class="`status-${epic.status}`">{{ epic.status }}</b></div>
         <h2>{{ epic.title }}</h2><p>{{ epic.descriptionMarkdown || 'Описание пока не добавлено.' }}</p>

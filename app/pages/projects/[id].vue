@@ -1,9 +1,9 @@
 <template>
   <div v-if="epic" class="content-page epic-page">
-    <div class="epic-hero" :class="{ archived: epic.status === 'archived' }">
+    <div class="epic-hero" :class="{ archived: epic.status === 'archived', 'status-blocked': epic.status === 'blocked' }">
       <span class="epic-hero__marker" :style="{ background: epic.marker ?? '#2563eb' }" />
       <div><NuxtLink :to="workspacePath('/projects')" class="back-link"><UIcon name="i-lucide-arrow-left" />Все проекты</NuxtLink><span class="eyebrow">{{ epic.code || 'PROJECT' }}</span><h2>{{ epic.title }}</h2><p>{{ period }}</p></div>
-      <div class="epic-hero__actions"><select :disabled="planner.readOnly" :value="epic.status" @change="planner.updateEpic(epic.id, { status: ($event.target as HTMLSelectElement).value as any })"><option value="active">Активен</option><option value="paused">На паузе</option><option value="done">Завершён</option><option value="archived">Архив</option></select><NuxtLink :to="workspacePath('/timeline')"><UButton color="neutral" variant="outline" icon="i-lucide-gantt-chart" label="Timeline" /></NuxtLink></div>
+      <div class="epic-hero__actions"><select aria-label="Статус эпика" :disabled="planner.readOnly" :value="epic.status" @change="planner.updateEpic(epic.id, { status: ($event.target as HTMLSelectElement).value as EpicStatus })"><option value="active">Активен</option><option value="paused">На паузе</option><option value="blocked">Заблокирован</option><option value="done">Завершён</option><option value="archived">Архив</option></select><NuxtLink :to="workspacePath('/timeline')"><UButton color="neutral" variant="outline" icon="i-lucide-gantt-chart" label="Timeline" /></NuxtLink></div>
     </div>
 
     <div class="epic-kpis"><article><span>Этапы</span><strong>{{ stages.length }}</strong></article><article><span>Трудоёмкость</span><strong>{{ personDays }} чел.-дн.</strong></article><article><span>Задачи</span><strong>{{ doneItems }}/{{ items.length }}</strong></article><article><span>Прогресс</span><strong>{{ progress }}%</strong></article></div>
@@ -33,7 +33,7 @@
 const workspacePath = useWorkspacePath()
 import { addWorkingDays, fromLocalDate } from '../../domain/calendar/date'
 import { epicPeriod } from '../../domain/models/epic-period'
-import type { ISODate, StageKind } from '../../domain/models/types'
+import type { EpicStatus, ISODate, StageKind } from '../../domain/models/types'
 import { usePlannerStore } from '../../stores/planner'
 const route = useRoute(); const planner = usePlannerStore(); await planner.initialize()
 const epic = computed(() => planner.data?.epics.find(item => item.id === route.params.id))

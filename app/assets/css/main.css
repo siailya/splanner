@@ -167,6 +167,7 @@ textarea {
 .gantt_task_line.stage-scope { border: 1px dashed rgb(255 255 255 / .75); background-image: repeating-linear-gradient(135deg, transparent, transparent 5px, rgb(255 255 255 / .16) 5px, rgb(255 255 255 / .16) 10px); }
 .gantt_task_line.status-done { opacity: .58; }
 .gantt_task_line.status-blocked, .gantt_task_line.has-conflict { outline: 2px solid #ef4444; outline-offset: 1px; }
+.gantt_task_line.epic-bar.status-blocked { border: 2px solid #ef4444; }
 .gantt_task_line.is-locked { filter: saturate(.55); }
 .gantt_task_line.is-new-since-baseline::after { position: absolute; top: -8px; right: -6px; display: grid; width: 14px; height: 14px; place-items: center; border-radius: 50%; background: #0f766e; color: white; content: "+"; font-size: 10px; font-weight: 800; }
 .gantt-baseline { position: absolute; z-index: 4; height: 4px; border: 1px solid #334155; border-radius: 2px; background: #94a3b8; pointer-events: none; opacity: .9; }
@@ -450,3 +451,6 @@ textarea.plain-description { resize: vertical; }
 .workspace-entry { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; }
 .workspace-entry form { display: flex; gap: .5rem; }
 .workspace-entry input, .recovery-overlay input { border: 1px solid var(--ui-border); border-radius: .5rem; padding: .6rem .8rem; }
+
+.project-card.status-blocked, .epic-hero.status-blocked { border-color: #ef4444; outline: 1px solid #ef4444; }
+.project-card__head b.status-blocked { color: #ef4444; }

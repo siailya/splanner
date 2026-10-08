@@ -21,7 +21,7 @@ const epicFields = z.object({
   title,
   code: z.string().nullable().optional(),
   descriptionMarkdown: z.string().optional(),
-  status: z.enum(['active', 'paused', 'done', 'archived']).optional(),
+  status: z.enum(['active', 'paused', 'done', 'archived', 'blocked']).optional(),
   startDate: date.nullable().optional(),
   endDate: date.nullable().optional(),
   marker: z.string().nullable().optional(),
